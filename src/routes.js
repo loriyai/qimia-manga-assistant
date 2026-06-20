@@ -3,8 +3,18 @@ import multer from "multer";
 import { access, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readConfig, writeConfig } from "./configStore.js";
+import { APP_VERSION } from "./version.js";
 import {
+  ADMIN_SESSION_MS,
+  createPasswordRecord,
+  deletionDecision,
+  normalizeUserId,
+  verifyPassword
+} from "./accessControl.js";
+import {
+  EMPTY_ACCESS,
   buildStoredFilename,
   EMPTY_AI_SITES,
   EMPTY_LIBRARY,
@@ -24,9 +34,42 @@ export function createRouter(options = {}) {
   const router = express.Router();
   const configPath = options.configPath;
   const upload = multer({ storage: multer.memoryStorage() });
+  const sessions = new Map();
+  const pendingUploads = new Map();
+  const now = options.now || (() => Date.now());
+
+  const getSession = (req, touch = false) => {
+    const token = parseCookies(req.headers.cookie || "").qimia_admin_session;
+    const session = token ? sessions.get(token) : null;
+    if (!session || session.expiresAt <= now()) {
+      if (token) sessions.delete(token);
+      return null;
+    }
+    if (touch) session.expiresAt = now() + ADMIN_SESSION_MS;
+    return session;
+  };
+
+  const requireAdmin = (req) => {
+    const session = getSession(req, true);
+    if (!session) throw httpError("管理员登录已失效，请重新登录", 401, "ADMIN_AUTH_REQUIRED");
+    return session;
+  };
+
+  const requireIdentity = async () => {
+    const config = await readConfig(configPath);
+    if (!config.currentUserId) throw httpError("请先在设置中填写本机用户 ID", 403, "IDENTITY_REQUIRED");
+    return config;
+  };
+
+  const assertDeleteAllowed = async (req, item) => {
+    const config = await readConfig(configPath);
+    const session = getSession(req, true);
+    const decision = deletionDecision(item, config.currentUserId, Boolean(session?.deleteOverrideEnabled), now());
+    if (!decision.allowed) throw httpError(decision.reason, 403, "DELETE_FORBIDDEN");
+  };
 
   router.get("/health", (req, res) => {
-    res.json({ ok: true, appName: "七秒漫剧助手" });
+    res.json({ ok: true, appName: "七秒漫剧助手", version: APP_VERSION });
   });
 
   router.get("/config", asyncHandler(async (req, res) => {
@@ -35,7 +78,76 @@ export function createRouter(options = {}) {
 
   router.post("/config", asyncHandler(async (req, res) => {
     const current = await readConfig(configPath);
-    res.json(await writeConfig(mergeConfig(current, req.body || {}), configPath));
+    const next = mergeConfig(current, req.body || {});
+    next.currentUserId = current.currentUserId;
+    res.json(await writeConfig(next, configPath));
+  }));
+
+  router.get("/access/status", asyncHandler(async (req, res) => {
+    const config = await readConfig(configPath);
+    const rootDir = await requireWorkspace(configPath);
+    const access = await readJsonFile(rootDir, "access.json", EMPTY_ACCESS);
+    const session = getSession(req);
+    res.json({
+      currentUserId: config.currentUserId,
+      adminConfigured: Boolean(access.data.admin),
+      adminAuthenticated: Boolean(session),
+      deleteOverrideEnabled: Boolean(session?.deleteOverrideEnabled),
+      sessionExpiresAt: session ? new Date(session.expiresAt).toISOString() : "",
+      serverTime: new Date(now()).toISOString(),
+      deleteWindowHours: 12
+    });
+  }));
+
+  router.post("/access/identity", asyncHandler(async (req, res) => {
+    const config = await readConfig(configPath);
+    const currentUserId = normalizeUserId(req.body?.userId);
+    if (config.currentUserId && config.currentUserId !== currentUserId) requireAdmin(req);
+    res.json(await writeConfig({ ...config, currentUserId }, configPath));
+  }));
+
+  router.post("/admin/setup", asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    const access = await readJsonFile(rootDir, "access.json", EMPTY_ACCESS);
+    if (access.data.admin) throw httpError("管理员账号已经创建", 409, "ADMIN_ALREADY_CONFIGURED");
+    const admin = await createPasswordRecord(req.body?.username, req.body?.password);
+    const saved = await writeJsonFile(rootDir, "access.json", { admin: { ...admin, createdAt: new Date(now()).toISOString() } }, access.mtimeMs);
+    res.json({ ok: true, adminConfigured: Boolean(saved.data.admin) });
+  }));
+
+  router.post("/admin/login", asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    const access = await readJsonFile(rootDir, "access.json", EMPTY_ACCESS);
+    if (!await verifyPassword(access.data.admin, req.body?.username, req.body?.password)) {
+      throw httpError("管理员账号或密码错误", 401, "ADMIN_LOGIN_FAILED");
+    }
+    const token = randomBytes(32).toString("hex");
+    const session = { expiresAt: now() + ADMIN_SESSION_MS, deleteOverrideEnabled: false };
+    sessions.set(token, session);
+    setSessionCookie(res, token, ADMIN_SESSION_MS);
+    res.json({ ok: true, sessionExpiresAt: new Date(session.expiresAt).toISOString() });
+  }));
+
+  router.post("/admin/logout", (req, res) => {
+    const token = parseCookies(req.headers.cookie || "").qimia_admin_session;
+    if (token) sessions.delete(token);
+    setSessionCookie(res, "", 0);
+    res.json({ ok: true });
+  });
+
+  router.post("/admin/delete-override", asyncHandler(async (req, res) => {
+    const session = requireAdmin(req);
+    session.deleteOverrideEnabled = Boolean(req.body?.enabled);
+    res.json({ ok: true, deleteOverrideEnabled: session.deleteOverrideEnabled, sessionExpiresAt: new Date(session.expiresAt).toISOString() });
+  }));
+
+  router.post("/admin/password", asyncHandler(async (req, res) => {
+    requireAdmin(req);
+    const rootDir = await requireWorkspace(configPath);
+    const access = await readJsonFile(rootDir, "access.json", EMPTY_ACCESS);
+    const admin = await createPasswordRecord(access.data.admin?.username, req.body?.password);
+    await writeJsonFile(rootDir, "access.json", { admin: { ...admin, createdAt: access.data.admin?.createdAt, updatedAt: new Date(now()).toISOString() } }, access.mtimeMs);
+    res.json({ ok: true });
   }));
 
   router.post("/workspace/init", asyncHandler(async (req, res) => {
@@ -122,7 +234,14 @@ export function createRouter(options = {}) {
 
   router.put("/prompts", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
-    res.json(await writeJsonFile(rootDir, "prompts.json", normalizePrompts(req.body.data), req.body.knownMtimeMs));
+    const config = await requireIdentity();
+    const current = await readJsonFile(rootDir, "prompts.json", EMPTY_PROMPTS);
+    const incoming = normalizePrompts(req.body.data);
+    const data = {
+      categories: await reconcileItems(req, current.data.categories || [], incoming.categories, config.currentUserId, assertDeleteAllowed, [], now),
+      prompts: await reconcileItems(req, current.data.prompts || [], incoming.prompts, config.currentUserId, assertDeleteAllowed, ["thumbnailFilename"], now)
+    };
+    res.json(await writeJsonFile(rootDir, "prompts.json", data, req.body.knownMtimeMs));
   }));
 
   router.get("/ai-sites", asyncHandler(async (req, res) => {
@@ -132,7 +251,11 @@ export function createRouter(options = {}) {
 
   router.put("/ai-sites", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
-    res.json(await writeJsonFile(rootDir, "ai-sites.json", normalizeAiSites(req.body.data), req.body.knownMtimeMs));
+    const config = await requireIdentity();
+    const current = await readJsonFile(rootDir, "ai-sites.json", EMPTY_AI_SITES);
+    const incoming = normalizeAiSites(req.body.data);
+    const sites = await reconcileItems(req, current.data.sites || [], incoming.sites, config.currentUserId, assertDeleteAllowed, [], now);
+    res.json(await writeJsonFile(rootDir, "ai-sites.json", { sites }, req.body.knownMtimeMs));
   }));
 
   router.post("/prompts/:id/thumbnail", upload.single("thumbnail"), asyncHandler(async (req, res) => {
@@ -141,11 +264,14 @@ export function createRouter(options = {}) {
       res.status(400).json({ error: "请选择图片文件" });
       return;
     }
+    const current = await readJsonFile(rootDir, "prompts.json", EMPTY_PROMPTS);
+    const data = normalizePrompts(current.data);
+    const promptItem = data.prompts.find((item) => item.id === req.params.id);
+    if (!promptItem) throw httpError("提示词不存在", 404, "NOT_FOUND");
+    if (promptItem.thumbnailFilename) await assertDeleteAllowed(req, promptItem);
     const filename = buildStoredFilename(req.file.originalname);
     await mkdir(path.join(rootDir, "thumbs"), { recursive: true });
     await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, "thumbs", filename), req.file.buffer));
-    const current = await readJsonFile(rootDir, "prompts.json", EMPTY_PROMPTS);
-    const data = normalizePrompts(current.data);
     data.prompts = data.prompts.map((promptItem) =>
       promptItem.id === req.params.id ? { ...promptItem, thumbnailFilename: filename, updatedAt: new Date().toISOString() } : promptItem
     );
@@ -158,6 +284,8 @@ export function createRouter(options = {}) {
     const current = await readJsonFile(rootDir, "prompts.json", EMPTY_PROMPTS);
     const data = normalizePrompts(current.data);
     const promptItem = data.prompts.find((item) => item.id === req.params.id);
+    if (!promptItem) throw httpError("提示词不存在", 404, "NOT_FOUND");
+    await assertDeleteAllowed(req, promptItem);
     const thumbnailFilename = promptItem?.thumbnailFilename || "";
     data.prompts = data.prompts.map((item) =>
       item.id === req.params.id ? { ...item, thumbnailFilename: "", updatedAt: new Date().toISOString() } : item
@@ -175,6 +303,7 @@ export function createRouter(options = {}) {
 
   router.post("/library/refresh", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
+    const config = await requireIdentity();
     const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
     const data = normalizeLibrary(current.data);
     const knownVideoFilenames = new Set(data.resources.map((item) => item.videoFilename).filter(Boolean));
@@ -194,6 +323,7 @@ export function createRouter(options = {}) {
           prompt: "",
           description: "",
           tags: [],
+          createdBy: config.currentUserId,
           createdAt: now,
           updatedAt: now
         };
@@ -208,11 +338,19 @@ export function createRouter(options = {}) {
 
   router.put("/library", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
-    res.json(await writeJsonFile(rootDir, "library.json", normalizeLibrary(req.body.data), req.body.knownMtimeMs));
+    const config = await requireIdentity();
+    const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
+    const incoming = normalizeLibrary(req.body.data);
+    const resources = await reconcileItems(req, current.data.resources || [], incoming.resources, config.currentUserId, assertDeleteAllowed, ["videoFilename", "thumbnailFilename"], now);
+    res.json(await writeJsonFile(rootDir, "library.json", { resources }, req.body.knownMtimeMs));
   }));
 
   router.post("/resources/upload-video", upload.single("video"), asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
+    const config = await requireIdentity();
+    for (const [token, pending] of pendingUploads) {
+      if (pending.expiresAt <= now()) pendingUploads.delete(token);
+    }
     if (!req.file) {
       res.status(400).json({ error: "请选择视频文件" });
       return;
@@ -220,17 +358,24 @@ export function createRouter(options = {}) {
     const filename = buildStoredFilename(req.file.originalname);
     await mkdir(path.join(rootDir, "videos"), { recursive: true });
     await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, "videos", filename), req.file.buffer));
-    res.json({ filename });
+    const uploadToken = randomBytes(24).toString("hex");
+    pendingUploads.set(uploadToken, { filename, rootDir, userId: config.currentUserId, expiresAt: now() + 60 * 60 * 1000 });
+    res.json({ filename, uploadToken });
   }));
 
   router.delete("/resources/uploaded-video", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
     const filename = String(req.body?.filename || "").trim();
-    if (!filename) {
+    const uploadToken = String(req.body?.uploadToken || "").trim();
+    const pending = pendingUploads.get(uploadToken);
+    if (!filename || !pending || pending.filename !== filename || pending.rootDir !== rootDir || pending.expiresAt <= now()) {
       res.status(400).json({ error: "请选择要删除的视频文件" });
       return;
     }
+    const library = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
+    if (library.data.resources.some((item) => item.videoFilename === filename)) throw httpError("正式资源中的视频不能作为临时文件删除", 403, "DELETE_FORBIDDEN");
     await removeWorkspaceFile(rootDir, "videos", filename);
+    pendingUploads.delete(uploadToken);
     res.json({ ok: true });
   }));
 
@@ -240,11 +385,14 @@ export function createRouter(options = {}) {
       res.status(400).json({ error: "请选择缩略图文件" });
       return;
     }
+    const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
+    const data = normalizeLibrary(current.data);
+    const resource = data.resources.find((item) => item.id === req.params.id);
+    if (!resource) throw httpError("视频资源不存在", 404, "NOT_FOUND");
+    if (resource.thumbnailFilename) await assertDeleteAllowed(req, resource);
     const filename = buildStoredFilename(req.file.originalname);
     await mkdir(path.join(rootDir, "thumbs"), { recursive: true });
     await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, "thumbs", filename), req.file.buffer));
-    const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
-    const data = normalizeLibrary(current.data);
     data.resources = data.resources.map((resource) =>
       resource.id === req.params.id ? { ...resource, thumbnailFilename: filename, updatedAt: new Date().toISOString() } : resource
     );
@@ -257,6 +405,8 @@ export function createRouter(options = {}) {
     const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
     const data = normalizeLibrary(current.data);
     const resource = data.resources.find((item) => item.id === req.params.id);
+    if (!resource) throw httpError("视频资源不存在", 404, "NOT_FOUND");
+    await assertDeleteAllowed(req, resource);
     const thumbnailFilename = resource?.thumbnailFilename || "";
     data.resources = data.resources.map((item) =>
       item.id === req.params.id ? { ...item, thumbnailFilename: "", updatedAt: new Date().toISOString() } : item
@@ -272,6 +422,8 @@ export function createRouter(options = {}) {
     const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
     const data = normalizeLibrary(current.data);
     const resource = data.resources.find((item) => item.id === req.params.id);
+    if (!resource) throw httpError("视频资源不存在", 404, "NOT_FOUND");
+    await assertDeleteAllowed(req, resource);
     const videoFilename = resource?.videoFilename || "";
     data.resources = data.resources.map((item) =>
       item.id === req.params.id ? { ...item, videoFilename: "", updatedAt: new Date().toISOString() } : item
@@ -282,11 +434,27 @@ export function createRouter(options = {}) {
     res.json(await writeJsonFile(rootDir, "library.json", data, current.mtimeMs));
   }));
 
+  router.delete("/resources/:id/unreferenced-video", asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
+    const resource = current.data.resources.find((item) => item.id === req.params.id);
+    if (!resource) throw httpError("视频资源不存在", 404, "NOT_FOUND");
+    await assertDeleteAllowed(req, resource);
+    const filename = String(req.body?.filename || "").trim();
+    if (current.data.resources.some((item) => item.videoFilename === filename)) {
+      throw httpError("视频仍被资源引用，不能删除", 409, "MEDIA_STILL_REFERENCED");
+    }
+    await removeWorkspaceFile(rootDir, "videos", filename);
+    res.json({ ok: true });
+  }));
+
   router.delete("/resources/:id", asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
     const current = await readJsonFile(rootDir, "library.json", EMPTY_LIBRARY);
     const data = normalizeLibrary(current.data);
     const resource = data.resources.find((item) => item.id === req.params.id);
+    if (!resource) throw httpError("视频资源不存在", 404, "NOT_FOUND");
+    await assertDeleteAllowed(req, resource);
     data.resources = data.resources.filter((item) => item.id !== req.params.id);
     if (resource && req.body?.deleteVideoFile && resource.videoFilename) {
       await removeWorkspaceFile(rootDir, "videos", resource.videoFilename);
@@ -348,6 +516,57 @@ function mergeConfig(current, patch) {
       ...(patch.syncthing || {})
     }
   };
+}
+
+async function reconcileItems(req, currentItems, incomingItems, currentUserId, assertDeleteAllowed, destructiveFields = [], clock = Date.now) {
+  const currentById = new Map(currentItems.map((item) => [item.id, item]));
+  const incomingIds = new Set(incomingItems.map((item) => item.id));
+  if (incomingIds.size !== incomingItems.length) throw httpError("内容 ID 不能重复", 400, "DUPLICATE_ITEM_ID");
+  for (const item of currentItems) {
+    if (!incomingIds.has(item.id)) await assertDeleteAllowed(req, item);
+  }
+
+  const timestamp = new Date(clock()).toISOString();
+  const result = [];
+  for (const incoming of incomingItems) {
+    if (!incoming?.id) throw httpError("内容 ID 无效", 400, "INVALID_ITEM_ID");
+    const current = currentById.get(incoming.id);
+    if (!current) {
+      result.push({ ...incoming, createdBy: currentUserId, createdAt: timestamp, updatedAt: incoming.updatedAt || timestamp });
+      continue;
+    }
+    for (const field of destructiveFields) {
+      if (current[field] && current[field] !== incoming[field]) await assertDeleteAllowed(req, current);
+    }
+    result.push({ ...incoming, createdBy: current.createdBy, createdAt: current.createdAt });
+  }
+  return result;
+}
+
+function parseCookies(cookieHeader) {
+  return Object.fromEntries(String(cookieHeader || "").split(";").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const separator = part.indexOf("=");
+    if (separator < 0) return [part, ""];
+    return [decodeURIComponent(part.slice(0, separator)), decodeURIComponent(part.slice(separator + 1))];
+  }));
+}
+
+function setSessionCookie(res, token, maxAgeMs) {
+  const parts = [
+    `qimia_admin_session=${encodeURIComponent(token)}`,
+    "Path=/api",
+    "HttpOnly",
+    "SameSite=Strict",
+    `Max-Age=${Math.max(0, Math.floor(maxAgeMs / 1000))}`
+  ];
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function httpError(message, status, code) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
 }
 
 async function syncthingRequest(syncthingConfig, endpoint, options = {}) {

@@ -32,6 +32,10 @@ describe("workspace storage", () => {
       data: { categories: [], prompts: [] },
       mtimeMs: expect.any(Number)
     });
+    await expect(readJsonFile(rootDir, "access.json", { admin: null })).resolves.toMatchObject({
+      data: { admin: null },
+      mtimeMs: expect.any(Number)
+    });
   });
 
   it("backs up the old JSON before overwriting it", async () => {

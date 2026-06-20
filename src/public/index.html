@@ -14,6 +14,7 @@
       <button class="nav-btn" data-page="videos">视频资源</button>
       <button class="nav-btn" data-page="ai-sites">AI网站</button>
       <button class="nav-btn" data-page="settings">设置</button>
+      <span id="appVersion" class="app-version" aria-label="当前软件版本"></span>
     </aside>
     <main class="main">
       <header class="topbar">
@@ -101,6 +102,43 @@
           </div>
           <p id="syncStatus" class="hint">未检查同步状态</p>
         </div>
+        <div class="settings-panel access-panel">
+          <h2>身份与管理员权限</h2>
+          <label for="currentUserId">本机用户 ID</label>
+          <input id="currentUserId" type="text" maxlength="40" placeholder="例如：zhangsan（同一人在多台电脑填写相同 ID）" />
+          <div class="toolbar">
+            <button id="saveCurrentUserBtn">保存用户 ID</button>
+          </div>
+          <p id="identityStatus" class="hint">尚未设置用户 ID，不能新增内容。</p>
+
+          <div id="adminSetupArea">
+            <h3>首次创建管理员</h3>
+            <input id="adminSetupUsername" type="text" autocomplete="username" placeholder="管理员账号" />
+            <input id="adminSetupPassword" type="password" autocomplete="new-password" placeholder="管理员密码（至少 8 位）" />
+            <button id="setupAdminBtn">创建管理员</button>
+          </div>
+          <div id="adminLoginArea" hidden>
+            <h3>管理员登录</h3>
+            <input id="adminLoginUsername" type="text" autocomplete="username" placeholder="管理员账号" />
+            <input id="adminLoginPassword" type="password" autocomplete="current-password" placeholder="管理员密码" />
+            <button id="loginAdminBtn">登录</button>
+          </div>
+          <div id="adminSessionArea" hidden>
+            <div class="admin-switch-row">
+              <div>
+                <strong>管理员删除权限</strong>
+                <p id="adminSessionStatus" class="hint"></p>
+              </div>
+              <label class="switch-label"><input id="deleteOverrideToggle" type="checkbox" /> 总开关</label>
+            </div>
+            <div class="toolbar">
+              <input id="adminNewPassword" type="password" autocomplete="new-password" placeholder="新密码（至少 8 位）" />
+              <button id="changeAdminPasswordBtn">修改密码</button>
+              <button id="logoutAdminBtn">退出管理员</button>
+            </div>
+          </div>
+          <p id="accessStatusMessage" class="hint"></p>
+        </div>
         </div>
       </section>
     </main>
@@ -114,8 +152,8 @@
       <textarea id="promptText" rows="8" placeholder="完整提示词"></textarea>
       <input id="promptDescription" placeholder="描述" />
       <div class="dialog-actions">
-        <button value="cancel">取消</button>
-        <button id="savePromptBtn" value="default">保存</button>
+        <button id="cancelPromptBtn" type="button">取消</button>
+        <button id="savePromptBtn" type="submit">保存</button>
       </div>
     </form>
   </dialog>
@@ -156,8 +194,8 @@
         <button id="removeResourceVideoBtn" type="button">移除视频</button>
       </div>
       <div class="dialog-actions">
-        <button value="cancel">取消</button>
-        <button id="saveResourceBtn" value="default">保存</button>
+        <button id="cancelResourceBtn" type="button">取消</button>
+        <button id="saveResourceBtn" type="submit">保存</button>
       </div>
     </form>
   </dialog>

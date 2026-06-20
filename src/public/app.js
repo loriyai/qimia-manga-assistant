@@ -3,6 +3,9 @@ const state = {
   prompts: { data: { categories: [], prompts: [] }, mtimeMs: 0 },
   library: { data: { resources: [] }, mtimeMs: 0 },
   aiSites: { data: { sites: [] }, mtimeMs: 0 },
+  access: { currentUserId: "", adminConfigured: false, adminAuthenticated: false, deleteOverrideEnabled: false, sessionExpiresAt: "", serverTime: "", deleteWindowHours: 12 },
+  serverTimeOffsetMs: 0,
+  appVersion: "",
   editingPromptId: "",
   editingResourceId: "",
   editingAiSiteId: "",
@@ -15,7 +18,9 @@ const state = {
   resourceSortDirection: "desc",
   resourceVideoRemoved: false,
   pendingVideoFilename: "",
-  pendingVideoUpload: null
+  pendingVideoUploadToken: "",
+  pendingVideoUpload: null,
+  resourceDialogSession: 0
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -26,8 +31,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindPrompts();
   bindResources();
   bindAiSites();
-  await loadConfig();
+  await Promise.all([loadConfig(), loadAppVersion(), loadAccessStatus()]);
   await loadAll();
+  window.setInterval(() => loadAccessStatus().catch(() => {}), 60_000);
 });
 
 function bindNavigation() {
@@ -77,6 +83,12 @@ function bindSettings() {
   $("#pauseSyncBtn").addEventListener("click", () => updateSyncPaused(true));
   $("#resumeSyncBtn").addEventListener("click", () => updateSyncPaused(false));
   $("#openSyncthingBtn").addEventListener("click", openSyncthing);
+  $("#saveCurrentUserBtn").addEventListener("click", saveCurrentUserId);
+  $("#setupAdminBtn").addEventListener("click", setupAdmin);
+  $("#loginAdminBtn").addEventListener("click", loginAdmin);
+  $("#logoutAdminBtn").addEventListener("click", logoutAdmin);
+  $("#changeAdminPasswordBtn").addEventListener("click", changeAdminPassword);
+  $("#deleteOverrideToggle").addEventListener("change", updateDeleteOverride);
 }
 
 function bindPrompts() {
@@ -89,6 +101,7 @@ function bindPrompts() {
     await savePrompts();
   });
   $("#addPromptBtn").addEventListener("click", () => openPromptDialog());
+  $("#cancelPromptBtn").addEventListener("click", () => $("#promptDialog").close("cancel"));
   $("#promptForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const existing = getPrompt(state.editingPromptId);
@@ -207,8 +220,19 @@ function bindResources() {
   });
   $("#resourceForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await saveResourceFromDialog();
-    $("#resourceDialog").close();
+    if ($("#saveResourceBtn").disabled) return;
+    $("#saveResourceBtn").disabled = true;
+    try {
+      await saveResourceFromDialog();
+      $("#resourceDialog").close("saved");
+    } finally {
+      if ($("#resourceDialog").open) $("#saveResourceBtn").disabled = false;
+    }
+  });
+  $("#cancelResourceBtn").addEventListener("click", cancelResourceDialog);
+  $("#resourceDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    cancelResourceDialog();
   });
   $("#closeDetailBtn").addEventListener("click", () => $("#detailDialog").close());
   $("#copyDetailBtn").addEventListener("click", async () => {
@@ -233,6 +257,12 @@ async function loadConfig() {
   renderWorkspaceStatus();
 }
 
+async function loadAppVersion() {
+  const health = await api("/api/health");
+  state.appVersion = health.version || "";
+  $("#appVersion").textContent = state.appVersion ? `v${state.appVersion}` : "";
+}
+
 async function loadAll() {
   await Promise.allSettled([loadPrompts(), loadLibrary(), loadAiSites()]);
 }
@@ -252,6 +282,13 @@ async function loadAiSites() {
   renderAiSites();
 }
 
+async function loadAccessStatus() {
+  state.access = await api("/api/access/status");
+  state.serverTimeOffsetMs = Date.parse(state.access.serverTime) - Date.now();
+  renderAccessPanel();
+  renderPermissionSensitiveViews();
+}
+
 async function refreshLibrary() {
   state.library = await api("/api/library/refresh", { method: "POST" });
   renderLibrary();
@@ -266,6 +303,106 @@ function renderConfigForm() {
   $("#syncthingApiUrl").value = state.config.syncthing?.apiUrl || "http://127.0.0.1:8384";
   $("#syncthingApiKey").value = state.config.syncthing?.apiKey || "";
   $("#syncthingFolderId").value = state.config.syncthing?.folderId || "";
+}
+
+function renderAccessPanel() {
+  const access = state.access;
+  $("#currentUserId").value = access.currentUserId || "";
+  $("#identityStatus").textContent = access.currentUserId
+    ? `当前身份：${access.currentUserId}。修改身份需要管理员登录。`
+    : "尚未设置用户 ID，不能新增内容。";
+  $("#adminSetupArea").hidden = access.adminConfigured;
+  $("#adminLoginArea").hidden = !access.adminConfigured || access.adminAuthenticated;
+  $("#adminSessionArea").hidden = !access.adminAuthenticated;
+  $("#deleteOverrideToggle").checked = Boolean(access.deleteOverrideEnabled);
+  $("#deleteOverrideToggle").disabled = !access.adminAuthenticated;
+  const expiresAt = Date.parse(access.sessionExpiresAt);
+  $("#adminSessionStatus").textContent = access.adminAuthenticated && Number.isFinite(expiresAt)
+    ? `已登录，会话约在 ${new Date(expiresAt).toLocaleTimeString()} 失效。`
+    : "";
+  $("#accessStatusMessage").textContent = access.deleteOverrideEnabled
+    ? "管理员删除权限已开启：所有受保护内容均可删除。"
+    : "普通规则：仅能删除自己创建未满 12 小时的内容。";
+}
+
+async function saveCurrentUserId() {
+  await api("/api/access/identity", { method: "POST", body: { userId: $("#currentUserId").value } });
+  state.config = await api("/api/config");
+  await loadAccessStatus();
+}
+
+async function setupAdmin() {
+  await api("/api/admin/setup", {
+    method: "POST",
+    body: { username: $("#adminSetupUsername").value, password: $("#adminSetupPassword").value }
+  });
+  $("#adminSetupPassword").value = "";
+  await loadAccessStatus();
+}
+
+async function loginAdmin() {
+  await api("/api/admin/login", {
+    method: "POST",
+    body: { username: $("#adminLoginUsername").value, password: $("#adminLoginPassword").value }
+  });
+  $("#adminLoginPassword").value = "";
+  await loadAccessStatus();
+}
+
+async function logoutAdmin() {
+  await api("/api/admin/logout", { method: "POST" });
+  await loadAccessStatus();
+}
+
+async function changeAdminPassword() {
+  await api("/api/admin/password", { method: "POST", body: { password: $("#adminNewPassword").value } });
+  $("#adminNewPassword").value = "";
+  $("#accessStatusMessage").textContent = "管理员密码已修改。";
+}
+
+async function updateDeleteOverride() {
+  const enabled = $("#deleteOverrideToggle").checked;
+  try {
+    await api("/api/admin/delete-override", { method: "POST", body: { enabled } });
+  } finally {
+    await loadAccessStatus();
+  }
+}
+
+function renderPermissionSensitiveViews() {
+  setCreateControls();
+  renderPrompts();
+  renderLibrary();
+  renderAiSites();
+  if ($("#categoryDialog").open) renderCategoryManagement();
+  if ($("#promptThumbDialog").open) updatePromptThumbnailDeletePermission();
+  if ($("#resourceDialog").open) renderResourceVideoStatus();
+}
+
+function setCreateControls() {
+  const disabled = !state.access.currentUserId;
+  const reason = disabled ? "请先在设置中填写本机用户 ID" : "";
+  ["#addPromptBtn", "#addCategoryBtn", "#addResourceBtn", "#refreshLibraryBtn", "#addAiSiteBtn"].forEach((selector) => {
+    const button = $(selector);
+    button.disabled = disabled;
+    button.title = reason;
+  });
+}
+
+function getDeletePermission(item) {
+  if (state.access.deleteOverrideEnabled) return { allowed: true, reason: "管理员删除权限已开启" };
+  if (!state.access.currentUserId) return { allowed: false, reason: "请先在设置中填写本机用户 ID" };
+  if (!item?.createdBy || !Number.isFinite(Date.parse(item?.createdAt))) return { allowed: false, reason: "旧数据仅管理员可以删除" };
+  if (item.createdBy !== state.access.currentUserId) return { allowed: false, reason: `由 ${item.createdBy} 创建，仅管理员可以删除` };
+  const age = Date.now() + state.serverTimeOffsetMs - Date.parse(item.createdAt);
+  if (age < 0 || age >= 12 * 60 * 60 * 1000) return { allowed: false, reason: "创建已满 12 小时，仅管理员可以删除" };
+  return { allowed: true, reason: "可删除" };
+}
+
+function applyDeletePermission(button, item) {
+  const permission = getDeletePermission(item);
+  button.disabled = !permission.allowed;
+  button.title = permission.reason;
 }
 
 async function saveSyncSettings() {
@@ -387,6 +524,7 @@ function bindPromptListActions() {
     button.addEventListener("click", () => openPromptThumbPreview(getPrompt(button.dataset.previewPromptThumb)));
   });
   document.querySelectorAll("[data-delete-prompt]").forEach((button) => {
+    applyDeletePermission(button, getPrompt(button.dataset.deletePrompt));
     button.addEventListener("click", async () => {
       if (!await confirmDialog("确定删除这个提示词吗？")) return;
       state.prompts.data.prompts = state.prompts.data.prompts.filter((item) => item.id !== button.dataset.deletePrompt);
@@ -403,6 +541,7 @@ function bindPromptListActions() {
     });
   });
   document.querySelectorAll("[data-delete-category]").forEach((button) => {
+    applyDeletePermission(button, state.prompts.data.categories.find((item) => item.id === button.dataset.deleteCategory));
     button.addEventListener("click", async () => {
       if (!confirm("确定删除分类吗？分类下的提示词会保留，但不再归类。")) return;
       state.prompts.data.categories = state.prompts.data.categories.filter((item) => item.id !== button.dataset.deleteCategory);
@@ -425,6 +564,17 @@ function openPromptThumbPreview(item) {
     image.hidden = true;
   }
   if (!$("#promptThumbDialog").open) $("#promptThumbDialog").showModal();
+  updatePromptThumbnailDeletePermission();
+}
+
+function updatePromptThumbnailDeletePermission() {
+  const item = getPrompt(state.previewPromptId);
+  const button = $("#deletePromptThumbBtn");
+  applyDeletePermission(button, item);
+  if (!item?.thumbnailFilename) {
+    button.disabled = true;
+    button.title = "当前没有缩略图";
+  }
 }
 
 function openPromptTextDialog(item) {
@@ -601,6 +751,7 @@ function bindResourceActions() {
     button.addEventListener("click", () => openResourceDialog(getResource(button.dataset.editResource)));
   });
   document.querySelectorAll("[data-delete-resource]").forEach((button) => {
+    applyDeletePermission(button, getResource(button.dataset.deleteResource));
     button.addEventListener("click", () => deleteResource(button.dataset.deleteResource));
   });
 }
@@ -666,6 +817,7 @@ function closeVideoPlayer() {
 }
 
 function openResourceDialog(item = null) {
+  state.resourceDialogSession += 1;
   state.editingResourceId = item?.id || "";
   state.resourceVideoRemoved = false;
   state.pendingVideoFilename = "";
@@ -684,6 +836,17 @@ function renderResourceVideoStatus() {
   const resource = getResource(state.editingResourceId);
   $("#saveResourceBtn").disabled = Boolean(state.pendingVideoUpload);
   $("#removeResourceVideoBtn").disabled = Boolean(state.pendingVideoUpload);
+  const resourcePermission = getDeletePermission(resource);
+  const hasVideo = Boolean(state.pendingVideoFilename || resource?.videoFilename);
+  if (!hasVideo && !state.pendingVideoUpload) {
+    $("#removeResourceVideoBtn").disabled = true;
+    $("#removeResourceVideoBtn").title = "当前没有视频";
+  } else if (resource?.videoFilename && !state.pendingVideoFilename && !state.pendingVideoUpload) {
+    $("#removeResourceVideoBtn").disabled = !resourcePermission.allowed;
+    $("#removeResourceVideoBtn").title = resourcePermission.reason;
+  } else {
+    $("#removeResourceVideoBtn").title = "";
+  }
   if (state.pendingVideoUpload) {
     $("#resourceVideoStatus").textContent = `正在复制到同步目录：${file?.name || "视频文件"}`;
     return;
@@ -706,27 +869,50 @@ function renderResourceVideoStatus() {
 async function uploadSelectedResourceVideo() {
   const videoFile = $("#resourceVideoFile").files[0];
   if (!videoFile) return;
+  const dialogSession = state.resourceDialogSession;
   const previousPendingVideoFilename = state.pendingVideoFilename;
+  const previousPendingVideoToken = state.pendingVideoUploadToken;
   state.pendingVideoFilename = "";
+  state.pendingVideoUploadToken = "";
   state.resourceVideoRemoved = false;
-  state.pendingVideoUpload = (async () => {
+  const uploadPromise = (async () => {
     const formData = new FormData();
     formData.append("video", videoFile);
-    const uploaded = await upload("/api/resources/upload-video", formData);
-    state.pendingVideoFilename = uploaded.filename;
-    if (previousPendingVideoFilename) {
-      await discardUploadedVideo(previousPendingVideoFilename);
-    }
+    return upload("/api/resources/upload-video", formData);
   })();
+  state.pendingVideoUpload = uploadPromise;
   renderResourceVideoStatus();
   try {
-    await state.pendingVideoUpload;
+    const uploaded = await uploadPromise;
+    if (dialogSession !== state.resourceDialogSession || !$("#resourceDialog").open) {
+      await discardUploadedVideo(uploaded.filename, uploaded.uploadToken);
+      return;
+    }
+    state.pendingVideoFilename = uploaded.filename;
+    state.pendingVideoUploadToken = uploaded.uploadToken;
+    if (previousPendingVideoFilename) await discardUploadedVideo(previousPendingVideoFilename, previousPendingVideoToken);
   } catch (error) {
-    $("#resourceVideoFile").value = "";
+    if (dialogSession === state.resourceDialogSession) $("#resourceVideoFile").value = "";
     throw error;
   } finally {
-    state.pendingVideoUpload = null;
-    renderResourceVideoStatus();
+    if (state.pendingVideoUpload === uploadPromise) state.pendingVideoUpload = null;
+    if (dialogSession === state.resourceDialogSession && $("#resourceDialog").open) renderResourceVideoStatus();
+  }
+}
+
+function cancelResourceDialog() {
+  const pendingFilename = state.pendingVideoFilename;
+  const pendingToken = state.pendingVideoUploadToken;
+  state.resourceDialogSession += 1;
+  state.editingResourceId = "";
+  state.resourceVideoRemoved = false;
+  state.pendingVideoFilename = "";
+  state.pendingVideoUploadToken = "";
+  state.pendingVideoUpload = null;
+  $("#resourceVideoFile").value = "";
+  if ($("#resourceDialog").open) $("#resourceDialog").close("cancel");
+  if (pendingFilename) {
+    discardUploadedVideo(pendingFilename, pendingToken).catch((error) => console.warn("清理已取消的视频失败", error));
   }
 }
 
@@ -741,15 +927,12 @@ async function removeVideoFromDialog() {
     state.resourceVideoRemoved = true;
     return;
   }
-  const deleteVideoFile = confirm("是否删除同步目录中的视频？");
   if (state.pendingVideoFilename) {
-    if (deleteVideoFile) await discardUploadedVideo(state.pendingVideoFilename);
+    await discardUploadedVideo(state.pendingVideoFilename, state.pendingVideoUploadToken);
     state.pendingVideoFilename = "";
+    state.pendingVideoUploadToken = "";
   }
   state.resourceVideoRemoved = true;
-  if (resource?.id && resource.videoFilename && !state.pendingVideoFilename) {
-    await removeResourceVideo(resource.id, deleteVideoFile);
-  }
 }
 
 async function saveResourceFromDialog() {
@@ -763,45 +946,65 @@ async function saveResourceFromDialog() {
     }
   }
   const now = new Date().toISOString();
-  let resource = getResource(state.editingResourceId);
-  if (!resource) {
-    resource = { id: createId("res"), videoFilename: "", thumbnailFilename: "", createdAt: now };
-    state.library.data.resources.unshift(resource);
-  }
+  const existingResource = getResource(state.editingResourceId);
+  const resource = existingResource
+    ? { ...existingResource }
+    : { id: createId("res"), videoFilename: "", thumbnailFilename: "", createdAt: now };
   resource.title = $("#resourceTitle").value.trim() || "未命名资源";
   resource.tags = $("#resourceTags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
   resource.prompt = $("#resourcePrompt").value;
   resource.description = $("#resourceDescription").value;
   resource.updatedAt = now;
 
-  if (state.pendingVideoFilename) {
-    const previousVideoFilename = resource.videoFilename;
-    resource.videoFilename = state.pendingVideoFilename;
-    state.pendingVideoFilename = "";
-    if (previousVideoFilename && previousVideoFilename !== resource.videoFilename) {
-      const deletePreviousVideoFile = confirm("是否删除同步目录中的原视频？");
-      if (deletePreviousVideoFile) await discardUploadedVideo(previousVideoFilename);
-    }
+  const pendingVideoFilename = state.pendingVideoFilename;
+  let previousVideoFilename = "";
+  if (pendingVideoFilename) {
+    previousVideoFilename = resource.videoFilename;
+    resource.videoFilename = pendingVideoFilename;
   } else if (state.resourceVideoRemoved) {
+    previousVideoFilename = resource.videoFilename;
     resource.videoFilename = "";
   }
 
-  await saveLibrary();
+  await saveResourceWithConflictRetry(resource);
+  state.pendingVideoFilename = "";
+  state.pendingVideoUploadToken = "";
+  state.resourceVideoRemoved = false;
+  if (previousVideoFilename && previousVideoFilename !== resource.videoFilename) {
+    const deletePreviousVideoFile = confirm("是否删除同步目录中的原视频？");
+    if (deletePreviousVideoFile) {
+      await api(`/api/resources/${resource.id}/unreferenced-video`, { method: "DELETE", body: { filename: previousVideoFilename } });
+    }
+  }
+}
+
+async function saveResourceWithConflictRetry(resource) {
+  const save = async (silentCodes = []) => {
+    const resources = state.library.data.resources.filter((item) => item.id !== resource.id);
+    const existingIndex = state.library.data.resources.findIndex((item) => item.id === resource.id);
+    if (existingIndex < 0) resources.unshift(resource);
+    else resources.splice(existingIndex, 0, resource);
+    state.library = await api("/api/library", {
+      method: "PUT",
+      body: { knownMtimeMs: state.library.mtimeMs, data: { ...state.library.data, resources } },
+      silentCodes
+    });
+  };
+
+  try {
+    await save(["STALE_FILE"]);
+  } catch (error) {
+    if (error.code !== "STALE_FILE") throw error;
+    state.library = await api("/api/library");
+    await save();
+  }
   renderLibrary();
 }
 
-async function removeResourceVideo(resourceId, deleteVideoFile) {
-  state.library = await api(`/api/resources/${resourceId}/video`, {
-    method: "DELETE",
-    body: { deleteVideoFile }
-  });
-  renderLibrary();
-}
-
-async function discardUploadedVideo(filename) {
+async function discardUploadedVideo(filename, uploadToken) {
   await api("/api/resources/uploaded-video", {
     method: "DELETE",
-    body: { filename }
+    body: { filename, uploadToken }
   });
 }
 
@@ -829,10 +1032,23 @@ function renderAiSites() {
       if (site) openAiSiteDialog(site);
     });
   });
+  document.querySelectorAll("[data-ai-site-select]").forEach((checkbox) => {
+    checkbox.addEventListener("change", updateAiSiteDeleteButton);
+  });
+  updateAiSiteDeleteButton();
   bindSortableList($("#aiSiteList"), ".ai-site-row[data-sort-id]", async (orderedIds) => {
     state.aiSites.data.sites = reorderVisibleItems(state.aiSites.data.sites, orderedIds);
     await saveAiSites();
   });
+}
+
+function updateAiSiteDeleteButton() {
+  const selectedIds = Array.from(document.querySelectorAll("[data-ai-site-select]:checked"), (item) => item.dataset.aiSiteSelect);
+  const selectedItems = selectedIds.map((id) => state.aiSites.data.sites.find((item) => item.id === id)).filter(Boolean);
+  const denied = selectedItems.map(getDeletePermission).find((permission) => !permission.allowed);
+  const button = $("#deleteAiSiteBtn");
+  button.disabled = !selectedItems.length || Boolean(denied);
+  button.title = !selectedItems.length ? "请先选择要删除的网址" : denied?.reason || "删除选中网址";
 }
 
 function bindSortableList(container, itemSelector, onReorder) {
@@ -954,8 +1170,10 @@ async function api(url, options = {}) {
   });
   const data = await response.json();
   if (!response.ok) {
-    alert(data.error || "操作失败");
-    throw new Error(data.error || "Request failed");
+    if (!options.silentCodes?.includes(data.code)) alert(data.error || "操作失败");
+    const error = new Error(data.error || "Request failed");
+    error.code = data.code || "";
+    throw error;
   }
   return data;
 }

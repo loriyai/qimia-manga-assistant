@@ -11,6 +11,7 @@ async function makeAppWithWorkspace() {
   const app = createApp({ configPath: path.join(rootDir, "config.json") });
   await request(app).post("/api/config").send({ workspaceDir: rootDir }).expect(200);
   await request(app).post("/api/workspace/init").expect(200);
+  await request(app).post("/api/access/identity").send({ userId: "test-user" }).expect(200);
   return { app, rootDir };
 }
 
@@ -20,7 +21,7 @@ describe("routes", () => {
 
     const response = await request(app).get("/api/health").expect(200);
 
-    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手" });
+    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手", version: "0.3.0" });
   });
 
   it("merges workspace and Syncthing config updates", async () => {
@@ -283,5 +284,79 @@ describe("routes", () => {
     expect(message).toContain("5177");
     expect(message).toContain("已经被占用");
     expect(message).toContain("PORT=5178");
+  });
+
+  it("enforces ownership, the 12-hour limit, and administrator override", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "qimia-access-routes-"));
+    const configPath = path.join(rootDir, "config.json");
+    let currentTime = Date.parse("2026-06-20T00:00:00.000Z");
+    const app = createApp({ configPath, now: () => currentTime });
+    const agent = request.agent(app);
+    await agent.post("/api/config").send({ workspaceDir: rootDir }).expect(200);
+    await agent.post("/api/workspace/init").expect(200);
+    await agent.post("/api/access/identity").send({ userId: "alice" }).expect(200);
+
+    const initial = await agent.get("/api/prompts").expect(200);
+    const created = await agent.put("/api/prompts").send({
+      knownMtimeMs: initial.body.mtimeMs,
+      data: {
+        categories: [],
+        prompts: [{ id: "protected-prompt", title: "保护内容", text: "text", createdBy: "mallory", createdAt: "2000-01-01T00:00:00.000Z" }]
+      }
+    }).expect(200);
+    expect(created.body.data.prompts[0]).toMatchObject({
+      createdBy: "alice",
+      createdAt: "2026-06-20T00:00:00.000Z"
+    });
+
+    currentTime += 12 * 60 * 60 * 1000;
+    const denied = await agent.put("/api/prompts").send({
+      knownMtimeMs: created.body.mtimeMs,
+      data: { categories: [], prompts: [] }
+    }).expect(403);
+    expect(denied.body.code).toBe("DELETE_FORBIDDEN");
+
+    await agent.post("/api/admin/setup").send({ username: "admin", password: "password-123" }).expect(200);
+    const publicStatus = await agent.get("/api/access/status").expect(200);
+    expect(JSON.stringify(publicStatus.body)).not.toContain("passwordHash");
+    const storedAccess = JSON.parse(await readFile(path.join(rootDir, "access.json"), "utf8"));
+    expect(storedAccess.admin.passwordHash).toEqual(expect.any(String));
+    expect(JSON.stringify(storedAccess)).not.toContain("password-123");
+    await agent.post("/api/access/identity").send({ userId: "bob" }).expect(401);
+    await agent.post("/api/admin/login").send({ username: "admin", password: "password-123" }).expect(200);
+    await agent.post("/api/access/identity").send({ userId: "bob" }).expect(200);
+    await agent.post("/api/admin/delete-override").send({ enabled: true }).expect(200);
+    await agent.put("/api/prompts").send({
+      knownMtimeMs: created.body.mtimeMs,
+      data: { categories: [], prompts: [] }
+    }).expect(200);
+
+    currentTime += 30 * 60 * 1000;
+    const status = await agent.get("/api/access/status").expect(200);
+    expect(status.body).toMatchObject({ adminAuthenticated: false, deleteOverrideEnabled: false });
+  });
+
+  it("requires an upload token and protects referenced videos from temporary cleanup", async () => {
+    const { app, rootDir } = await makeAppWithWorkspace();
+    const uploaded = await request(app)
+      .post("/api/resources/upload-video")
+      .attach("video", Buffer.from("temporary-video"), "temporary.mp4")
+      .expect(200);
+    expect(uploaded.body.uploadToken).toEqual(expect.any(String));
+
+    await request(app).delete("/api/resources/uploaded-video")
+      .send({ filename: uploaded.body.filename, uploadToken: "wrong" })
+      .expect(400);
+
+    const initial = await request(app).get("/api/library").expect(200);
+    await request(app).put("/api/library").send({
+      knownMtimeMs: initial.body.mtimeMs,
+      data: { resources: [{ id: "res-upload", title: "已保存", videoFilename: uploaded.body.filename }] }
+    }).expect(200);
+    const denied = await request(app).delete("/api/resources/uploaded-video")
+      .send({ filename: uploaded.body.filename, uploadToken: uploaded.body.uploadToken })
+      .expect(403);
+    expect(denied.body.code).toBe("DELETE_FORBIDDEN");
+    await expect(readFile(path.join(rootDir, "videos", uploaded.body.filename), "utf8")).resolves.toBe("temporary-video");
   });
 });

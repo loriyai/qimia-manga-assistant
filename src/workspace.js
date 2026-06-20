@@ -1,12 +1,13 @@
 import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const JSON_FILES = new Set(["library.json", "prompts.json", "ai-sites.json"]);
+const JSON_FILES = new Set(["library.json", "prompts.json", "ai-sites.json", "access.json"]);
 const MEDIA_DIRS = new Set(["videos", "thumbs"]);
 
 export const EMPTY_LIBRARY = { resources: [] };
 export const EMPTY_PROMPTS = { categories: [], prompts: [] };
 export const EMPTY_AI_SITES = { sites: [] };
+export const EMPTY_ACCESS = { admin: null };
 
 export async function initWorkspace(rootDir) {
   const workspaceDir = assertWorkspaceDir(rootDir);
@@ -16,6 +17,7 @@ export async function initWorkspace(rootDir) {
   await ensureJsonFile(workspaceDir, "library.json", EMPTY_LIBRARY);
   await ensureJsonFile(workspaceDir, "prompts.json", EMPTY_PROMPTS);
   await ensureJsonFile(workspaceDir, "ai-sites.json", EMPTY_AI_SITES);
+  await ensureJsonFile(workspaceDir, "access.json", EMPTY_ACCESS);
   return { workspaceDir };
 }
 

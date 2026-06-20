@@ -30,6 +30,7 @@ export async function writeConfig(config, configPath = DEFAULT_CONFIG_PATH) {
 function normalizeConfig(config = {}) {
   return {
     workspaceDir: String(config.workspaceDir || DEFAULT_WORKSPACE_DIR).trim(),
+    currentUserId: String(config.currentUserId || "").normalize("NFC").trim(),
     syncthing: {
       apiUrl: String(config.syncthing?.apiUrl || "http://127.0.0.1:8384").trim(),
       apiKey: String(config.syncthing?.apiKey || "").trim(),
