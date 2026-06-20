@@ -1,0 +1,7 @@
+node_modules/
+workspace/
+release/
+.updates/
+update.json
+qimia-manga-assistant-v*.zip
+.DS_Store

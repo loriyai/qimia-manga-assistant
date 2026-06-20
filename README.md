@@ -1,0 +1,98 @@
+# 七秒漫剧助手
+
+七秒漫剧助手是一个本地运行的小团队资源库。它用 Node.js 在本机启动服务，用浏览器打开界面。提示词、视频、缩略图和资源信息默认保存在项目目录下的 `workspace/`，也可以在设置页迁移到其他本机目录或 Syncthing 同步目录。
+
+## 推荐同步目录
+
+在 Syncthing 中创建并同步一个团队目录，例如：
+
+```text
+TeamMangaResources/
+  library.json
+  prompts.json
+  videos/
+  thumbs/
+  backups/
+```
+
+每个成员在自己的电脑上安装 Syncthing，并互相添加设备。目录同步完成后，可以在七秒漫剧助手的设置页迁移到本机上的这个目录路径。
+
+## 安装和启动
+
+新电脑可以先双击依赖安装脚本：
+
+- macOS：双击 `install-dependencies-mac.command`
+- Windows：双击 `install-dependencies-windows.bat`
+
+脚本会检查并安装 Node.js、Syncthing，然后执行 `npm install` 安装项目依赖。安装系统软件需要网络，过程中可能需要输入电脑密码或同意系统安装提示。
+
+如果已经安装 Node.js，也可以手动安装项目依赖：
+
+```bash
+npm install
+npm run dev
+```
+
+启动后打开：
+
+```text
+http://localhost:5177
+```
+
+Windows 可以双击 `start-windows.bat`。
+
+macOS 可以运行：
+
+```bash
+chmod +x start-mac.command
+./start-mac.command
+```
+
+## 软件更新
+
+Windows 和 macOS 的启动脚本会在服务器启动前检查 GitHub Releases。发现更高的稳定版本时，会显示版本号和更新说明，并询问是否安装；跳过更新或网络异常不会影响当前版本启动。
+
+首次发布前，在 `package.json` 的 `qimiaUpdater.repository` 中填写公开仓库的 `owner/repository`。发布新版时：
+
+1. 更新 `package.json` 和 `package-lock.json` 的版本号。
+2. 提交代码并推送形如 `v0.2.0` 的标签。
+3. GitHub Actions 会自动测试、生成 ZIP、计算 SHA-256，并发布 `update.json` 和更新包。
+
+更新器不会覆盖 `workspace/`、`node_modules/`、`.git/`、`.updates/` 或用户主目录中的配置。新版依赖会先在临时目录安装，校验和准备全部成功后才替换程序；更新后在 `.updates/` 中保留最近一个旧版本备份。
+
+## 使用流程
+
+1. 启动后可以直接使用默认的 `workspace/` 工作目录。
+2. 如需同步到团队目录，打开设置页，在“迁移到新工作目录”中填写目标目录。
+3. 点击“迁移工作目录”，应用会复制当前工作目录数据并自动切换到新目录。
+4. 到“提示词”页新增分类和提示词。
+5. 到“视频资源”页新增视频，填写提示词，添加自定义缩略图。
+6. 团队成员通过 Syncthing 自动收到 JSON 和媒体文件变化。
+
+设置页里的“保存目录”只会切换配置，不会复制文件；需要搬运现有数据时请使用“迁移工作目录”。
+
+## 同步设置
+
+设置页可以填写 Syncthing 地址、API Key 和文件夹 ID。API Key 在 Syncthing 页面中通过“操作 -> 设置 -> GUI -> API 密钥”查看。
+
+填写后可以在七秒漫剧助手中检查同步状态、立即扫描同步文件夹、暂停同步、恢复同步，或打开 Syncthing 管理页面。同步设置只保存在本机配置中，不会同步给其他成员。
+
+## 视频资源排序
+
+视频资源页支持按名字、创建时间、修改时间排序，每种排序都可以选择正序或倒序。
+
+## 同步和冲突
+
+软件保存 `library.json` 或 `prompts.json` 前会检查文件是否已被其他成员更新。如果检测到更新，会拒绝覆盖并提示刷新后再保存。
+
+每次覆盖保存前，旧 JSON 会复制到 `backups/`，方便误操作后找回。
+
+## 删除文件
+
+删除视频资源时，默认只删除资源记录。界面会询问是否同时删除本地视频文件和缩略图文件。
+
+删除缩略图时，界面会询问是否同时删除本地缩略图文件。选择取消时，只会清空资源里的缩略图引用。
+
+## 旧扩展文件
+
+当前仓库根目录里的旧扩展文件只作为参考资料保留。七秒漫剧助手是独立的新应用，运行时只使用 `qimia-manga-assistant/` 目录中的代码。

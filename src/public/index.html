@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>七秒漫剧助手</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">七秒</div>
+      <button class="nav-btn active" data-page="prompts">提示词</button>
+      <button class="nav-btn" data-page="videos">视频资源</button>
+      <button class="nav-btn" data-page="ai-sites">AI网站</button>
+      <button class="nav-btn" data-page="settings">设置</button>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <h1>七秒漫剧助手</h1>
+        <span id="workspaceStatus">未设置同步目录</span>
+      </header>
+
+      <section class="page active" id="page-prompts">
+        <div class="toolbar">
+          <select id="promptCategoryFilter" hidden></select>
+          <button id="addPromptBtn">新增提示词</button>
+          <button id="manageCategoriesBtn">分类管理</button>
+        </div>
+        <div class="prompt-layout">
+          <div class="prompt-list" id="promptList"></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-videos">
+        <div class="toolbar">
+          <button id="addResourceBtn">新增视频资源</button>
+          <button id="refreshLibraryBtn">刷新资源库</button>
+          <input id="resourceSearch" class="toolbar-search" type="search" placeholder="搜索标题、标签、提示词、描述" />
+          <select id="resourceSortField" class="toolbar-select">
+            <option value="title">按名字</option>
+            <option value="createdAt" selected>按创建时间</option>
+            <option value="updatedAt">按修改时间</option>
+          </select>
+          <select id="resourceSortDirection" class="toolbar-select">
+            <option value="asc">正序</option>
+            <option value="desc" selected>倒序</option>
+          </select>
+        </div>
+        <div class="video-grid" id="videoGrid"></div>
+      </section>
+
+      <section class="page" id="page-ai-sites">
+        <div class="toolbar">
+          <button id="addAiSiteBtn">新增</button>
+          <button id="deleteAiSiteBtn">删除</button>
+        </div>
+        <div class="ai-site-panel">
+          <div class="ai-site-row ai-site-header">
+            <div></div>
+            <div>标题</div>
+            <div>网址</div>
+            <div>操作</div>
+          </div>
+          <div id="aiSiteList"></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-settings">
+        <div class="settings-layout">
+        <div class="settings-panel">
+          <label for="workspaceDir">Syncthing 同步目录</label>
+          <input id="workspaceDir" type="text" placeholder="例如：D:\\TeamMangaResources 或 /Users/me/TeamMangaResources" />
+          <div class="toolbar">
+            <button id="saveWorkspaceBtn">保存目录</button>
+            <button id="initWorkspaceBtn">创建目录结构</button>
+            <button id="reloadAllBtn">重新读取</button>
+          </div>
+          <label for="migrateWorkspaceDir">迁移到新工作目录</label>
+          <input id="migrateWorkspaceDir" type="text" placeholder="填写新的本机目录，迁移完成后会自动切换" />
+          <div class="toolbar">
+            <button id="migrateWorkspaceBtn">迁移工作目录</button>
+          </div>
+          <p class="hint">目录会保存在本机配置中，不会同步给其他成员。</p>
+        </div>
+        <div class="settings-panel">
+          <h2>同步设置</h2>
+          <label for="syncthingApiUrl">Syncthing 地址</label>
+          <input id="syncthingApiUrl" type="text" placeholder="http://127.0.0.1:8384" />
+          <label for="syncthingApiKey">API Key</label>
+          <input id="syncthingApiKey" type="password" placeholder="在 Syncthing 设置里的 GUI API 密钥" />
+          <label for="syncthingFolderId">文件夹 ID</label>
+          <input id="syncthingFolderId" type="text" placeholder="例如：TeamMangaResources" />
+          <div class="toolbar">
+            <button id="saveSyncSettingsBtn">保存同步设置</button>
+            <button id="checkSyncStatusBtn">检查状态</button>
+            <button id="scanSyncFolderBtn">立即扫描</button>
+            <button id="pauseSyncBtn">暂停同步</button>
+            <button id="resumeSyncBtn">恢复同步</button>
+            <button id="openSyncthingBtn">打开 Syncthing</button>
+          </div>
+          <p id="syncStatus" class="hint">未检查同步状态</p>
+        </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="promptDialog" class="dialog">
+    <form method="dialog" id="promptForm">
+      <h2 id="promptDialogTitle">提示词</h2>
+      <input id="promptTitle" placeholder="标题" />
+      <select id="promptCategory"></select>
+      <textarea id="promptText" rows="8" placeholder="完整提示词"></textarea>
+      <input id="promptDescription" placeholder="描述" />
+      <div class="dialog-actions">
+        <button value="cancel">取消</button>
+        <button id="savePromptBtn" value="default">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="aiSiteDialog" class="dialog">
+    <form id="aiSiteForm">
+      <h2>新增 AI 网站</h2>
+      <input id="aiSiteTitle" placeholder="标题" />
+      <input id="aiSiteUrl" placeholder="网址" />
+      <div class="dialog-actions">
+        <button id="cancelAiSiteBtn" type="button">取消</button>
+        <button id="saveAiSiteBtn" type="button">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="categoryDialog" class="dialog category-dialog">
+    <div class="detail-header">
+      <h2>分类管理</h2>
+      <button id="closeCategoryDialogBtn">关闭</button>
+    </div>
+    <div class="toolbar">
+      <button id="addCategoryBtn">新增分类</button>
+    </div>
+    <div class="category-list" id="categoryList"></div>
+  </dialog>
+
+  <dialog id="resourceDialog" class="dialog wide">
+    <form method="dialog" id="resourceForm">
+      <h2 id="resourceDialogTitle">视频资源</h2>
+      <input id="resourceTitle" placeholder="标题" />
+      <input id="resourceTags" placeholder="标签，用逗号分隔" />
+      <textarea id="resourcePrompt" rows="8" placeholder="完整提示词"></textarea>
+      <textarea id="resourceDescription" rows="3" placeholder="描述"></textarea>
+      <label>视频文件 <input id="resourceVideoFile" type="file" accept="video/*" /></label>
+      <div class="file-actions">
+        <span id="resourceVideoStatus" class="muted">未选择视频</span>
+        <button id="removeResourceVideoBtn" type="button">移除视频</button>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel">取消</button>
+        <button id="saveResourceBtn" value="default">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="detailDialog" class="dialog wide">
+    <div class="detail-header">
+      <h2 id="detailTitle">详情</h2>
+      <button id="closeDetailBtn">关闭</button>
+    </div>
+    <textarea id="detailPrompt" rows="10"></textarea>
+    <textarea id="detailDescription" rows="4"></textarea>
+    <div class="dialog-actions">
+      <button id="copyDetailBtn">复制</button>
+      <button id="saveDetailBtn">保存</button>
+    </div>
+  </dialog>
+
+  <dialog id="videoPlayerDialog" class="dialog video-player-dialog">
+    <div class="preview-actions">
+      <button id="closeVideoPlayerBtn">关闭</button>
+    </div>
+    <video id="videoPlayer" controls autoplay></video>
+  </dialog>
+
+  <dialog id="promptThumbDialog" class="dialog prompt-thumb-dialog">
+    <div class="preview-actions">
+      <button id="choosePromptThumbBtn">选择图片</button>
+      <button id="deletePromptThumbBtn">删除</button>
+      <button id="closePromptThumbBtn">关闭</button>
+    </div>
+    <div id="promptThumbViewport" class="image-viewport">
+      <img id="promptThumbPreviewImg" alt="提示词缩略图预览" />
+    </div>
+  </dialog>
+
+  <dialog id="promptThumbUploadDialog" class="dialog prompt-thumb-upload-dialog">
+    <h2>选择图片</h2>
+    <div id="promptThumbDropZone" class="drop-zone" tabindex="0">
+      <p>拖入图片或粘贴图片</p>
+      <button id="browsePromptThumbBtn" type="button">选择文件</button>
+      <input id="promptThumbFileInput" type="file" accept="image/*" hidden />
+    </div>
+    <div class="dialog-actions">
+      <button id="closePromptThumbUploadBtn" type="button">关闭</button>
+    </div>
+  </dialog>
+
+  <dialog id="promptTextDialog" class="dialog prompt-text-dialog">
+    <div class="detail-header">
+      <h2 id="promptTextDialogTitle">提示词</h2>
+      <div class="preview-actions">
+        <button id="copyPromptTextBtn">复制</button>
+        <button id="closePromptTextBtn">关闭</button>
+      </div>
+    </div>
+    <pre id="promptTextPreview"></pre>
+  </dialog>
+
+  <dialog id="confirmDialog" class="dialog confirm-dialog">
+    <h2 id="confirmDialogTitle">确认操作</h2>
+    <p id="confirmDialogMessage"></p>
+    <div class="dialog-actions">
+      <button id="confirmCancelBtn" type="button">取消</button>
+      <button id="confirmOkBtn" type="button">确定</button>
+    </div>
+  </dialog>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

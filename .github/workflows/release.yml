@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Verify tag and package version
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${VERSION}"
+      - name: Build release package
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          npm run release:build -- release
+          (cd release && zip -qr "../qimia-manga-assistant-v${VERSION}.zip" .)
+          PACKAGE="qimia-manga-assistant-v${VERSION}.zip"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${PACKAGE}"
+          node scripts/create-update-manifest.mjs "${PACKAGE}" "${URL}" update.json
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          gh release create "${GITHUB_REF_NAME}" \
+            "qimia-manga-assistant-v${VERSION}.zip" update.json \
+            --title "七秒漫剧助手 ${GITHUB_REF_NAME}" \
+            --generate-notes
