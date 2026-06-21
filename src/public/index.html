@@ -15,6 +15,7 @@
       <button class="nav-btn" data-page="ai-sites">AI网站</button>
       <button class="nav-btn" data-page="characters">人物</button>
       <button class="nav-btn" data-page="scenes">场景</button>
+      <button id="globalReloadBtn" class="sidebar-action">重新读取</button>
       <button class="nav-btn settings-nav" data-page="settings">设置</button>
       <span id="appVersion" class="app-version" aria-label="当前软件版本"></span>
     </aside>
@@ -38,7 +39,7 @@
       <section class="page" id="page-videos">
         <div class="toolbar">
           <button id="addResourceBtn">新增视频资源</button>
-          <button id="refreshLibraryBtn">刷新资源库</button>
+          <button id="refreshLibraryBtn">扫描视频目录</button>
           <input id="resourceSearch" class="toolbar-search" type="search" placeholder="搜索标题、标签、提示词、描述" />
           <select id="resourceSortField" class="toolbar-select">
             <option value="title">按名字</option>
@@ -73,6 +74,11 @@
         <div class="toolbar asset-toolbar">
           <button id="addCharacterBtn">新增人物资产</button>
           <input id="characterSearch" class="toolbar-search" type="search" placeholder="搜索人物标题和标签" />
+          <select id="characterStyleFilter" class="toolbar-select">
+            <option value="">无</option>
+            <option value="anime">动漫</option>
+            <option value="live">真人</option>
+          </select>
           <select id="characterGenderFilter" class="toolbar-select">
             <option value="">男/女</option>
             <option value="male">男</option>
@@ -92,6 +98,11 @@
         <div class="toolbar asset-toolbar">
           <button id="addSceneBtn">新增场景资产</button>
           <input id="sceneSearch" class="toolbar-search" type="search" placeholder="搜索场景标题和标签" />
+          <select id="sceneStyleFilter" class="toolbar-select">
+            <option value="">无</option>
+            <option value="anime">动漫</option>
+            <option value="live">真人</option>
+          </select>
           <select id="sceneEraFilter" class="toolbar-select">
             <option value="">古代/现代</option>
             <option value="ancient">古代</option>
@@ -329,6 +340,7 @@
       <div class="preview-actions">
         <button id="editImageAssetBtn">编辑</button>
         <button id="deleteImageAssetBtn">删除</button>
+        <input id="imageAssetPreviewTitle" type="text" readonly aria-label="资产标题" />
       </div>
       <button id="closeImageAssetPreviewBtn">关闭</button>
     </div>

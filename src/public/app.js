@@ -8,8 +8,8 @@ const state = {
     scenes: { data: { assets: [] }, mtimeMs: 0 }
   },
   assetUi: {
-    characters: { style: "anime", era: "ancient", search: "", gender: "" },
-    scenes: { style: "anime", era: "ancient", search: "" }
+    characters: { style: "anime", era: "ancient", styleFilter: "", search: "", gender: "" },
+    scenes: { style: "anime", era: "ancient", styleFilter: "", search: "" }
   },
   editingImageAssetType: "",
   editingImageAssetId: "",
@@ -92,7 +92,8 @@ function bindSettings() {
     renderWorkspaceStatus();
     await loadAll();
   });
-  $("#reloadAllBtn").addEventListener("click", loadAll);
+  $("#reloadAllBtn").addEventListener("click", () => reloadAllData($("#reloadAllBtn")));
+  $("#globalReloadBtn").addEventListener("click", () => reloadAllData($("#globalReloadBtn")));
   $("#saveSyncSettingsBtn").addEventListener("click", saveSyncSettings);
   $("#checkSyncStatusBtn").addEventListener("click", checkSyncStatus);
   $("#scanSyncFolderBtn").addEventListener("click", scanSyncFolder);
@@ -190,6 +191,8 @@ function bindImageAssets() {
     state.assetUi.characters.gender = $("#characterGenderFilter").value;
     renderImageAssetPage("characters");
   });
+  $("#characterStyleFilter").addEventListener("change", () => changeImageAssetStyle("characters", $("#characterStyleFilter").value));
+  $("#sceneStyleFilter").addEventListener("change", () => changeImageAssetStyle("scenes", $("#sceneStyleFilter").value));
   $("#characterEraFilter").addEventListener("change", () => changeImageAssetEra("characters", $("#characterEraFilter").value));
   $("#sceneEraFilter").addEventListener("change", () => changeImageAssetEra("scenes", $("#sceneEraFilter").value));
   $("#browseImageAssetBtn").addEventListener("click", () => $("#imageAssetFileInput").click());
@@ -317,6 +320,23 @@ async function loadAppVersion() {
 
 async function loadAll() {
   await Promise.allSettled([loadPrompts(), loadLibrary(), loadAiSites(), loadImageAssets("characters"), loadImageAssets("scenes")]);
+}
+
+async function reloadAllData(button) {
+  if (button?.disabled) return;
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "读取中…";
+  }
+  try {
+    await Promise.all([loadAll(), loadAccessStatus()]);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText;
+    }
+  }
 }
 
 async function loadPrompts() {
@@ -1098,6 +1118,8 @@ function renderImageAssetPage(type) {
     button.addEventListener("click", () => {
       ui.style = button.dataset.style;
       ui.era = button.dataset.era;
+      ui.styleFilter = ui.style;
+      config.styleFilter.value = ui.styleFilter;
       config.eraFilter.value = ui.era;
       renderImageAssetPage(type);
     });
@@ -1118,6 +1140,10 @@ function renderImageAssetPage(type) {
   `).join("") || `<p class="empty-state">暂无${typeLabel}图片资产</p>`;
   config.grid.querySelectorAll("[data-image-asset-id]").forEach((button) => {
     button.addEventListener("click", () => openImageAssetPreview(type, button.dataset.imageAssetId));
+    const image = button.querySelector("img");
+    const updateOrientation = () => button.classList.toggle("portrait", image.naturalHeight > image.naturalWidth);
+    image.addEventListener("load", updateOrientation, { once: true });
+    if (image.complete && image.naturalWidth) updateOrientation();
   });
 }
 
@@ -1127,8 +1153,16 @@ function getImageAssetConfig(type) {
     label: character ? "人物" : "场景",
     tabs: $(character ? "#characterTabs" : "#sceneTabs"),
     grid: $(character ? "#characterGrid" : "#sceneGrid"),
+    styleFilter: $(character ? "#characterStyleFilter" : "#sceneStyleFilter"),
     eraFilter: $(character ? "#characterEraFilter" : "#sceneEraFilter")
   };
+}
+
+function changeImageAssetStyle(type, style) {
+  const ui = state.assetUi[type];
+  ui.styleFilter = style;
+  if (style) ui.style = style;
+  renderImageAssetPage(type);
 }
 
 function changeImageAssetEra(type, era) {
@@ -1217,6 +1251,16 @@ function selectImageAssetFile(file) {
   $("#imageAssetSelectedPreview").src = state.selectedImageAssetUrl;
   $("#imageAssetSelectedPreview").hidden = false;
   $("#imageAssetDropHint").textContent = `已选择：${file.name || "粘贴图片"}`;
+  if (!$("#imageAssetTitle").value.trim()) {
+    $("#imageAssetTitle").value = getImageAssetTitleFromFile(file);
+  }
+}
+
+function getImageAssetTitleFromFile(file) {
+  const filename = String(file?.name || "").trim();
+  if (!filename) return "粘贴图片";
+  const title = filename.replace(/\.[^.]+$/, "").trim();
+  return title || "粘贴图片";
 }
 
 function clearSelectedImageAssetFile() {
@@ -1251,6 +1295,8 @@ async function saveImageAssetFromDialog(event) {
     state.imageAssets[type] = response.collection;
     state.assetUi[type].style = response.asset.style;
     state.assetUi[type].era = response.asset.era;
+    state.assetUi[type].styleFilter = response.asset.style;
+    getImageAssetConfig(type).styleFilter.value = response.asset.style;
     getImageAssetConfig(type).eraFilter.value = response.asset.era;
     closeImageAssetDialog();
     renderImageAssetPage(type);
@@ -1270,6 +1316,7 @@ function openImageAssetPreview(type, id) {
   const image = $("#imageAssetPreviewImg");
   image.src = getImageAssetMediaUrl(type, item.imageFilename);
   image.alt = item.title || "图片资产预览";
+  $("#imageAssetPreviewTitle").value = item.title || "未命名资产";
   updateImageAssetPreviewPermissions();
   $("#imageAssetPreviewDialog").showModal();
 }

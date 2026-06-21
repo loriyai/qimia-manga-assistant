@@ -21,7 +21,7 @@ describe("routes", () => {
 
     const response = await request(app).get("/api/health").expect(200);
 
-    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手", version: "0.4.0" });
+    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手", version: "0.5.0" });
   });
 
   it("merges workspace and Syncthing config updates", async () => {
