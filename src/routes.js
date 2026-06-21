@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import { access, mkdir } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -15,6 +15,7 @@ import {
 } from "./accessControl.js";
 import {
   EMPTY_ACCESS,
+  buildAssetStoredFilename,
   buildStoredFilename,
   EMPTY_AI_SITES,
   EMPTY_LIBRARY,
@@ -286,6 +287,7 @@ export function createRouter(options = {}) {
     requireIdentity,
     assertEditAllowed,
     assertDeleteAllowed,
+    revealFile: options.revealFile || revealInFileManager,
     now
   });
   registerImageAssetRoutes({
@@ -299,6 +301,7 @@ export function createRouter(options = {}) {
     requireIdentity,
     assertEditAllowed,
     assertDeleteAllowed,
+    revealFile: options.revealFile || revealInFileManager,
     now
   });
 
@@ -574,6 +577,7 @@ function registerImageAssetRoutes(options) {
     requireIdentity,
     assertEditAllowed,
     assertDeleteAllowed,
+    revealFile,
     now
   } = options;
   const route = `/assets/${routeName}`;
@@ -583,13 +587,33 @@ function registerImageAssetRoutes(options) {
     res.json(await readJsonFile(rootDir, jsonFilename, EMPTY_IMAGE_ASSETS));
   }));
 
+  router.post(`${route}/:id/reveal`, asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    const current = await readJsonFile(rootDir, jsonFilename, EMPTY_IMAGE_ASSETS);
+    const asset = current.data.assets.find((item) => item.id === req.params.id);
+    if (!asset) throw httpError("图片资产不存在", 404, "NOT_FOUND");
+    let filePath;
+    try {
+      filePath = getMediaPath(rootDir, mediaDir, asset.imageFilename);
+      await access(filePath);
+    } catch {
+      throw httpError("图片文件不存在", 404, "NOT_FOUND");
+    }
+    try {
+      await revealFile(filePath);
+    } catch {
+      throw httpError("无法打开图片所在文件夹", 500, "REVEAL_FAILED");
+    }
+    res.json({ ok: true });
+  }));
+
   router.post(route, imageUpload.single("image"), asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
     const config = await requireIdentity();
     if (!req.file) throw httpError("请选择图片", 400, "IMAGE_REQUIRED");
     const fields = normalizeImageAssetFields(req.body, requiresGender);
     const timestamp = new Date(now()).toISOString();
-    const filename = buildStoredFilename(req.file.originalname);
+    const filename = await storeAssetImage(rootDir, mediaDir, req.file);
     const asset = {
       id: createId(routeName === "characters" ? "character" : "scene"),
       ...fields,
@@ -598,8 +622,6 @@ function registerImageAssetRoutes(options) {
       createdAt: timestamp,
       updatedAt: timestamp
     };
-    await mkdir(path.join(rootDir, mediaDir), { recursive: true });
-    await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, mediaDir, filename), req.file.buffer));
     try {
       const saved = await mutateAssetJson(rootDir, jsonFilename, async (data) => {
         data.assets.unshift(asset);
@@ -616,11 +638,7 @@ function registerImageAssetRoutes(options) {
     const rootDir = await requireWorkspace(configPath);
     await requireIdentity();
     const fields = normalizeImageAssetFields(req.body, requiresGender);
-    const newFilename = req.file ? buildStoredFilename(req.file.originalname) : "";
-    if (req.file) {
-      await mkdir(path.join(rootDir, mediaDir), { recursive: true });
-      await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, mediaDir, newFilename), req.file.buffer));
-    }
+    const newFilename = req.file ? await storeAssetImage(rootDir, mediaDir, req.file) : "";
     let oldFilename = "";
     try {
       const saved = await mutateAssetJson(rootDir, jsonFilename, async (data) => {
@@ -678,6 +696,27 @@ async function mutateAssetJson(rootDir, jsonFilename, mutator) {
     }
   }
   throw lastError;
+}
+
+async function storeAssetImage(rootDir, mediaDir, file) {
+  await mkdir(path.join(rootDir, mediaDir), { recursive: true });
+  const originalName = decodeMultipartFilename(file.originalname);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const filename = buildAssetStoredFilename(originalName, file.mimetype);
+    try {
+      await writeFile(getMediaPath(rootDir, mediaDir, filename), file.buffer, { flag: "wx" });
+      return filename;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+  }
+  throw httpError("无法生成唯一的图片文件名，请重试", 500, "FILENAME_COLLISION");
+}
+
+function decodeMultipartFilename(filename) {
+  const value = String(filename || "");
+  const decoded = Buffer.from(value, "latin1").toString("utf8");
+  return decoded.includes("\uFFFD") ? value : decoded;
 }
 
 function normalizeImageAssetFields(body, requiresGender) {
@@ -788,6 +827,25 @@ export async function startSyncthing() {
     child.once("error", reject);
     child.once("spawn", resolve);
     child.unref();
+  });
+}
+
+export function getRevealCommand(filePath, platform = process.platform) {
+  if (platform === "darwin") return { command: "open", args: ["-R", filePath] };
+  if (platform === "win32") return { command: "explorer.exe", args: ["/select,", filePath] };
+  return { command: "xdg-open", args: [path.dirname(filePath)] };
+}
+
+export async function revealInFileManager(filePath, options = {}) {
+  const { command, args } = getRevealCommand(filePath, options.platform);
+  const spawnImpl = options.spawnImpl || spawn;
+  await new Promise((resolve, reject) => {
+    const child = spawnImpl(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref?.();
+      resolve();
+    });
   });
 }
 

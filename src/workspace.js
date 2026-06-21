@@ -1,4 +1,5 @@
 import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import path from "node:path";
 
 const JSON_FILES = new Set(["library.json", "prompts.json", "ai-sites.json", "access.json", "characters.json", "scenes.json"]);
@@ -129,6 +130,44 @@ export async function removeWorkspaceFile(rootDir, mediaDir, filename) {
 export function buildStoredFilename(originalName) {
   const safeOriginal = path.basename(String(originalName || "file")).replace(/[^a-zA-Z0-9._-]+/g, "-");
   return `${Date.now()}-${Math.random().toString(16).slice(2)}-${safeOriginal}`;
+}
+
+export function buildAssetStoredFilename(originalName, mimeType, suffix = randomBytes(4).toString("hex")) {
+  const mimeExtensions = {
+    "image/jpeg": { allowed: new Set([".jpg", ".jpeg"]), fallback: ".jpg" },
+    "image/png": { allowed: new Set([".png"]), fallback: ".png" },
+    "image/webp": { allowed: new Set([".webp"]), fallback: ".webp" },
+    "image/gif": { allowed: new Set([".gif"]), fallback: ".gif" },
+    "image/avif": { allowed: new Set([".avif"]), fallback: ".avif" }
+  };
+  const value = String(originalName || "").replaceAll("\\", "/").split("/").pop().normalize("NFC");
+  const originalExtension = path.extname(value).toLowerCase();
+  const extensionRule = mimeExtensions[mimeType] || { allowed: new Set(), fallback: "" };
+  const extension = extensionRule.allowed.has(originalExtension) ? originalExtension : extensionRule.fallback;
+  const originalBase = originalExtension ? value.slice(0, -originalExtension.length) : value;
+  let safeBase = originalBase
+    .replace(/[\u0000-\u001f\u007f-\u009f<>:"/\\|?*]+/g, "-")
+    .trim()
+    .replace(/-+/g, "-")
+    .replace(/^[ .-]+|[ .-]+$/g, "");
+  if (!safeBase) safeBase = "图片";
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(safeBase)) safeBase = `_${safeBase}`;
+  safeBase = truncateUtf8(safeBase, 180).replace(/[ .-]+$/g, "") || "图片";
+  const safeSuffix = String(suffix || "").replace(/[^a-f0-9]/gi, "").slice(0, 8).toLowerCase();
+  if (safeSuffix.length !== 8) throw new Error("Invalid asset filename suffix");
+  return `${safeBase}-${safeSuffix}${extension}`;
+}
+
+function truncateUtf8(value, maxBytes) {
+  let result = "";
+  let bytes = 0;
+  for (const character of String(value || "")) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (bytes + size > maxBytes) break;
+    result += character;
+    bytes += size;
+  }
+  return result;
 }
 
 async function ensureJsonFile(rootDir, filename, fallback) {

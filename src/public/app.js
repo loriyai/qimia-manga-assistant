@@ -211,6 +211,8 @@ function bindImageAssets() {
   $("#closeImageAssetPreviewBtn").addEventListener("click", () => $("#imageAssetPreviewDialog").close());
   $("#editImageAssetBtn").addEventListener("click", editPreviewedImageAsset);
   $("#deleteImageAssetBtn").addEventListener("click", deletePreviewedImageAsset);
+  $("#copyImageAssetBtn").addEventListener("click", copyPreviewedImageAsset);
+  $("#revealImageAssetBtn").addEventListener("click", revealPreviewedImageAsset);
   bindImageAssetPreviewControls();
 }
 
@@ -1328,6 +1330,78 @@ function updateImageAssetPreviewPermissions() {
   for (const selector of ["#editImageAssetBtn", "#deleteImageAssetBtn"]) {
     $(selector).disabled = !permission.allowed;
     $(selector).title = permission.reason;
+  }
+}
+
+async function copyPreviewedImageAsset() {
+  const item = getImageAsset(state.previewImageAssetType, state.previewImageAssetId);
+  if (!item) return;
+  const button = $("#copyImageAssetBtn");
+  const originalText = button.textContent;
+  button.disabled = true;
+  try {
+    const response = await fetch(getImageAssetMediaUrl(state.previewImageAssetType, item.imageFilename));
+    if (!response.ok) throw new Error("无法读取图片");
+    await writeImageBlobToClipboard(await response.blob());
+    button.textContent = "已复制";
+    window.setTimeout(() => {
+      if (button.textContent === "已复制") button.textContent = originalText;
+    }, 1500);
+  } catch (error) {
+    alert(error?.message || "复制图片失败");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function writeImageBlobToClipboard(blob) {
+  const ClipboardItemClass = window.ClipboardItem;
+  if (!navigator.clipboard?.write || !ClipboardItemClass) throw new Error("当前浏览器不支持复制图片");
+  const supportsOriginal = blob.type === "image/png"
+    || (typeof ClipboardItemClass.supports === "function" && ClipboardItemClass.supports(blob.type));
+  if (supportsOriginal) {
+    try {
+      await navigator.clipboard.write([new ClipboardItemClass({ [blob.type]: blob })]);
+      return;
+    } catch (error) {
+      if (blob.type === "image/png") throw error;
+    }
+  }
+  const pngBlob = await convertImageBlobToPng(blob);
+  await navigator.clipboard.write([new ClipboardItemClass({ "image/png": pngBlob })]);
+}
+
+async function convertImageBlobToPng(blob) {
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.addEventListener("load", resolve, { once: true });
+      image.addEventListener("error", () => reject(new Error("无法转换图片格式")), { once: true });
+      image.src = objectUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    canvas.getContext("2d").drawImage(image, 0, 0);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => result ? resolve(result) : reject(new Error("无法转换图片格式")), "image/png");
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function revealPreviewedImageAsset() {
+  const type = state.previewImageAssetType;
+  const item = getImageAsset(type, state.previewImageAssetId);
+  if (!item) return;
+  const button = $("#revealImageAssetBtn");
+  button.disabled = true;
+  try {
+    await api(`/api/assets/${type}/${encodeURIComponent(item.id)}/reveal`, { method: "POST" });
+  } finally {
+    button.disabled = false;
   }
 }
 

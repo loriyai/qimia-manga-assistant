@@ -11,11 +11,11 @@
     <aside class="sidebar">
       <div class="brand">七秒</div>
       <button class="nav-btn active" data-page="prompts">提示词</button>
-      <button class="nav-btn" data-page="videos">视频资源</button>
+      <button class="nav-btn two-line-nav" data-page="videos"><span>视频</span><span>资源</span></button>
       <button class="nav-btn" data-page="ai-sites">AI网站</button>
       <button class="nav-btn" data-page="characters">人物</button>
       <button class="nav-btn" data-page="scenes">场景</button>
-      <button id="globalReloadBtn" class="sidebar-action">重新读取</button>
+      <button id="globalReloadBtn" class="sidebar-action">刷新</button>
       <button class="nav-btn settings-nav" data-page="settings">设置</button>
       <span id="appVersion" class="app-version" aria-label="当前软件版本"></span>
     </aside>
@@ -337,12 +337,16 @@
 
   <dialog id="imageAssetPreviewDialog" class="dialog image-asset-preview-dialog">
     <div class="asset-preview-header">
-      <div class="preview-actions">
+      <div class="preview-actions asset-preview-left-actions">
         <button id="editImageAssetBtn">编辑</button>
         <button id="deleteImageAssetBtn">删除</button>
         <input id="imageAssetPreviewTitle" type="text" readonly aria-label="资产标题" />
       </div>
-      <button id="closeImageAssetPreviewBtn">关闭</button>
+      <div class="asset-preview-right-actions">
+        <button id="revealImageAssetBtn">打开文件夹</button>
+        <button id="copyImageAssetBtn">复制</button>
+        <button id="closeImageAssetPreviewBtn">关闭</button>
+      </div>
     </div>
     <div id="imageAssetViewport" class="image-viewport asset-image-viewport">
       <img id="imageAssetPreviewImg" alt="图片资产预览" />

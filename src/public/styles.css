@@ -87,6 +87,14 @@ textarea {
   padding: 8px 6px;
 }
 
+.two-line-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+}
+
 .nav-btn.active {
   color: #11131d;
   background: #f5f7fb;
@@ -168,7 +176,7 @@ textarea {
 
 .dialog.image-asset-preview-dialog {
   width: 75vw;
-  height: 75vh;
+  height: 97.5vh;
   max-width: none;
   max-height: none;
 }
@@ -194,6 +202,17 @@ textarea {
   flex: 1;
 }
 
+.asset-preview-left-actions {
+  justify-content: flex-start;
+}
+
+.asset-preview-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 #imageAssetPreviewTitle {
   width: min(420px, 50vw);
   min-width: 160px;
@@ -202,13 +221,16 @@ textarea {
 }
 
 .asset-image-viewport {
+  position: relative;
   flex: 1;
   min-height: 0;
 }
 
 #imageAssetPreviewImg {
-  max-width: 100%;
-  max-height: 100%;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   transform-origin: center;
   user-select: none;

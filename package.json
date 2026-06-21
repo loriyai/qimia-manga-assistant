@@ -1,6 +1,6 @@
 {
   "name": "qimia-manga-assistant",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "七秒漫剧助手 - 本地团队资源库",
   "type": "module",
   "scripts": {

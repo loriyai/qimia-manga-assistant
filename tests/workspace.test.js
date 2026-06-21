@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertSafeFilename,
+  buildAssetStoredFilename,
   initWorkspace,
   migrateWorkspace,
   readJsonFile,
@@ -81,6 +82,30 @@ describe("workspace storage", () => {
     expect(assertSafeFilename("clip.mp4")).toBe("clip.mp4");
     expect(() => assertSafeFilename("../clip.mp4")).toThrow("Unsafe filename");
     expect(() => assertSafeFilename("nested/clip.mp4")).toThrow("Unsafe filename");
+  });
+
+  it("builds readable, cross-platform-safe asset image filenames", () => {
+    expect(buildAssetStoredFilename("角色 立绘.最终.PNG", "image/png", "A3F91C2D"))
+      .toBe("角色 立绘.最终-a3f91c2d.png");
+    expect(buildAssetStoredFilename("folder\\场景:夜?.webp", "image/webp", "12345678"))
+      .toBe("场景-夜-12345678.webp");
+    expect(buildAssetStoredFilename("CON.png", "image/png", "abcdef12"))
+      .toBe("_CON-abcdef12.png");
+    expect(buildAssetStoredFilename("hero.png", "image/jpeg", "abcdef12"))
+      .toBe("hero-abcdef12.jpg");
+    expect(buildAssetStoredFilename("e\u0301.png", "image/png", "abcdef12"))
+      .toBe("é-abcdef12.png");
+  });
+
+  it("limits asset filenames and generates different suffixes for the same original name", () => {
+    const longName = `${"人物😀".repeat(100)}.png`;
+    const limited = buildAssetStoredFilename(longName, "image/png", "abcdef12");
+    expect(Buffer.byteLength(limited, "utf8")).toBeLessThanOrEqual(193);
+    const first = buildAssetStoredFilename("人物.png", "image/png");
+    const second = buildAssetStoredFilename("人物.png", "image/png");
+    expect(first).toMatch(/^人物-[0-9a-f]{8}\.png$/);
+    expect(second).toMatch(/^人物-[0-9a-f]{8}\.png$/);
+    expect(first).not.toBe(second);
   });
 
   it("removes a workspace file only from the requested media folder", async () => {
