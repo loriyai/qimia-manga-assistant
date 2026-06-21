@@ -1,23 +1,28 @@
 import { copyFile, cp, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const JSON_FILES = new Set(["library.json", "prompts.json", "ai-sites.json", "access.json"]);
-const MEDIA_DIRS = new Set(["videos", "thumbs"]);
+const JSON_FILES = new Set(["library.json", "prompts.json", "ai-sites.json", "access.json", "characters.json", "scenes.json"]);
+const MEDIA_DIRS = new Set(["videos", "thumbs", "characters", "scenes"]);
 
 export const EMPTY_LIBRARY = { resources: [] };
 export const EMPTY_PROMPTS = { categories: [], prompts: [] };
 export const EMPTY_AI_SITES = { sites: [] };
 export const EMPTY_ACCESS = { admin: null };
+export const EMPTY_IMAGE_ASSETS = { assets: [] };
 
 export async function initWorkspace(rootDir) {
   const workspaceDir = assertWorkspaceDir(rootDir);
   await mkdir(path.join(workspaceDir, "videos"), { recursive: true });
   await mkdir(path.join(workspaceDir, "thumbs"), { recursive: true });
+  await mkdir(path.join(workspaceDir, "characters"), { recursive: true });
+  await mkdir(path.join(workspaceDir, "scenes"), { recursive: true });
   await mkdir(path.join(workspaceDir, "backups"), { recursive: true });
   await ensureJsonFile(workspaceDir, "library.json", EMPTY_LIBRARY);
   await ensureJsonFile(workspaceDir, "prompts.json", EMPTY_PROMPTS);
   await ensureJsonFile(workspaceDir, "ai-sites.json", EMPTY_AI_SITES);
   await ensureJsonFile(workspaceDir, "access.json", EMPTY_ACCESS);
+  await ensureJsonFile(workspaceDir, "characters.json", EMPTY_IMAGE_ASSETS);
+  await ensureJsonFile(workspaceDir, "scenes.json", EMPTY_IMAGE_ASSETS);
   return { workspaceDir };
 }
 

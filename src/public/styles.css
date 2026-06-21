@@ -92,14 +92,86 @@ textarea {
   background: #f5f7fb;
 }
 
-.app-version {
+.settings-nav {
   margin-top: auto;
+}
+
+.app-version {
+  margin-top: 0;
   padding: 8px 2px 2px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1;
   text-align: center;
   user-select: none;
+}
+
+.asset-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.asset-tabs button.active {
+  color: #11131d;
+  background: #f5f7fb;
+}
+
+.asset-grid {
+  columns: 220px;
+  column-gap: 14px;
+}
+
+.asset-card {
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  break-inside: avoid;
+  background: var(--panel);
+  display: block;
+}
+
+.asset-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.asset-drop-zone {
+  min-height: 250px;
+}
+
+#imageAssetSelectedPreview {
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.image-asset-preview-dialog {
+  width: min(960px, calc(100vw - 40px));
+}
+
+.asset-preview-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.asset-image-viewport {
+  height: min(72vh, 760px);
+}
+
+#imageAssetPreviewImg {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center;
+  user-select: none;
+  pointer-events: none;
 }
 
 .main {

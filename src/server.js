@@ -15,14 +15,17 @@ export function createApp(options = {}) {
 
   app.get("/media/video/:filename", mediaHandler(options.configPath, "videos"));
   app.get("/media/thumb/:filename", mediaHandler(options.configPath, "thumbs"));
+  app.get("/media/characters/:filename", mediaHandler(options.configPath, "characters"));
+  app.get("/media/scenes/:filename", mediaHandler(options.configPath, "scenes"));
 
   app.use((error, req, res, next) => {
     if (res.headersSent) {
       next(error);
       return;
     }
-    res.status(error.status || (error.code === "ENOENT" ? 404 : 500)).json({
-      error: error.message || "服务器错误",
+    const fileTooLarge = error.code === "LIMIT_FILE_SIZE";
+    res.status(error.status || (fileTooLarge ? 413 : error.code === "ENOENT" ? 404 : 500)).json({
+      error: fileTooLarge ? "图片不能超过 25MB" : error.message || "服务器错误",
       code: error.code || "SERVER_ERROR"
     });
   });

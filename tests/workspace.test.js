@@ -24,6 +24,8 @@ describe("workspace storage", () => {
     await expect(stat(path.join(rootDir, "videos"))).resolves.toMatchObject({ isDirectory: expect.any(Function) });
     await expect(stat(path.join(rootDir, "thumbs"))).resolves.toMatchObject({ isDirectory: expect.any(Function) });
     await expect(stat(path.join(rootDir, "backups"))).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+    await expect(stat(path.join(rootDir, "characters"))).resolves.toMatchObject({ isDirectory: expect.any(Function) });
+    await expect(stat(path.join(rootDir, "scenes"))).resolves.toMatchObject({ isDirectory: expect.any(Function) });
     await expect(readJsonFile(rootDir, "library.json", { resources: [] })).resolves.toMatchObject({
       data: { resources: [] },
       mtimeMs: expect.any(Number)
@@ -36,6 +38,8 @@ describe("workspace storage", () => {
       data: { admin: null },
       mtimeMs: expect.any(Number)
     });
+    await expect(readJsonFile(rootDir, "characters.json", { assets: [] })).resolves.toMatchObject({ data: { assets: [] } });
+    await expect(readJsonFile(rootDir, "scenes.json", { assets: [] })).resolves.toMatchObject({ data: { assets: [] } });
   });
 
   it("backs up the old JSON before overwriting it", async () => {

@@ -18,6 +18,7 @@ import {
   buildStoredFilename,
   EMPTY_AI_SITES,
   EMPTY_LIBRARY,
+  EMPTY_IMAGE_ASSETS,
   EMPTY_PROMPTS,
   getMediaPath,
   initWorkspace,
@@ -34,6 +35,15 @@ export function createRouter(options = {}) {
   const router = express.Router();
   const configPath = options.configPath;
   const upload = multer({ storage: multer.memoryStorage() });
+  const imageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, callback) => {
+      const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+      if (!allowed.has(file.mimetype)) return callback(httpError("仅支持 JPEG、PNG、WebP、GIF 或 AVIF 图片", 400, "INVALID_IMAGE_TYPE"));
+      callback(null, true);
+    }
+  });
   const sessions = new Map();
   const pendingUploads = new Map();
   const now = options.now || (() => Date.now());
@@ -66,6 +76,13 @@ export function createRouter(options = {}) {
     const session = getSession(req, true);
     const decision = deletionDecision(item, config.currentUserId, Boolean(session?.deleteOverrideEnabled), now());
     if (!decision.allowed) throw httpError(decision.reason, 403, "DELETE_FORBIDDEN");
+  };
+
+  const assertEditAllowed = async (req, item) => {
+    const config = await readConfig(configPath);
+    const session = getSession(req, true);
+    const decision = deletionDecision(item, config.currentUserId, Boolean(session?.deleteOverrideEnabled), now());
+    if (!decision.allowed) throw httpError(decision.reason.replace("删除", "编辑"), 403, "EDIT_FORBIDDEN");
   };
 
   router.get("/health", (req, res) => {
@@ -257,6 +274,33 @@ export function createRouter(options = {}) {
     const sites = await reconcileItems(req, current.data.sites || [], incoming.sites, config.currentUserId, assertDeleteAllowed, [], now);
     res.json(await writeJsonFile(rootDir, "ai-sites.json", { sites }, req.body.knownMtimeMs));
   }));
+
+  registerImageAssetRoutes({
+    router,
+    routeName: "characters",
+    jsonFilename: "characters.json",
+    mediaDir: "characters",
+    requiresGender: true,
+    imageUpload,
+    configPath,
+    requireIdentity,
+    assertEditAllowed,
+    assertDeleteAllowed,
+    now
+  });
+  registerImageAssetRoutes({
+    router,
+    routeName: "scenes",
+    jsonFilename: "scenes.json",
+    mediaDir: "scenes",
+    requiresGender: false,
+    imageUpload,
+    configPath,
+    requireIdentity,
+    assertEditAllowed,
+    assertDeleteAllowed,
+    now
+  });
 
   router.post("/prompts/:id/thumbnail", upload.single("thumbnail"), asyncHandler(async (req, res) => {
     const rootDir = await requireWorkspace(configPath);
@@ -516,6 +560,137 @@ function mergeConfig(current, patch) {
       ...(patch.syncthing || {})
     }
   };
+}
+
+function registerImageAssetRoutes(options) {
+  const {
+    router,
+    routeName,
+    jsonFilename,
+    mediaDir,
+    requiresGender,
+    imageUpload,
+    configPath,
+    requireIdentity,
+    assertEditAllowed,
+    assertDeleteAllowed,
+    now
+  } = options;
+  const route = `/assets/${routeName}`;
+
+  router.get(route, asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    res.json(await readJsonFile(rootDir, jsonFilename, EMPTY_IMAGE_ASSETS));
+  }));
+
+  router.post(route, imageUpload.single("image"), asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    const config = await requireIdentity();
+    if (!req.file) throw httpError("请选择图片", 400, "IMAGE_REQUIRED");
+    const fields = normalizeImageAssetFields(req.body, requiresGender);
+    const timestamp = new Date(now()).toISOString();
+    const filename = buildStoredFilename(req.file.originalname);
+    const asset = {
+      id: createId(routeName === "characters" ? "character" : "scene"),
+      ...fields,
+      imageFilename: filename,
+      createdBy: config.currentUserId,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
+    await mkdir(path.join(rootDir, mediaDir), { recursive: true });
+    await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, mediaDir, filename), req.file.buffer));
+    try {
+      const saved = await mutateAssetJson(rootDir, jsonFilename, async (data) => {
+        data.assets.unshift(asset);
+        return { data, asset };
+      });
+      res.status(201).json({ asset: saved.result.asset, collection: saved.saved });
+    } catch (error) {
+      await removeWorkspaceFile(rootDir, mediaDir, filename).catch(() => {});
+      throw error;
+    }
+  }));
+
+  router.put(`${route}/:id`, imageUpload.single("image"), asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    await requireIdentity();
+    const fields = normalizeImageAssetFields(req.body, requiresGender);
+    const newFilename = req.file ? buildStoredFilename(req.file.originalname) : "";
+    if (req.file) {
+      await mkdir(path.join(rootDir, mediaDir), { recursive: true });
+      await import("node:fs/promises").then((fs) => fs.writeFile(getMediaPath(rootDir, mediaDir, newFilename), req.file.buffer));
+    }
+    let oldFilename = "";
+    try {
+      const saved = await mutateAssetJson(rootDir, jsonFilename, async (data) => {
+        const index = data.assets.findIndex((item) => item.id === req.params.id);
+        if (index < 0) throw httpError("图片资产不存在", 404, "NOT_FOUND");
+        const current = data.assets[index];
+        await assertEditAllowed(req, current);
+        oldFilename = current.imageFilename;
+        data.assets[index] = {
+          ...current,
+          ...fields,
+          imageFilename: newFilename || current.imageFilename,
+          createdBy: current.createdBy,
+          createdAt: current.createdAt,
+          updatedAt: new Date(now()).toISOString()
+        };
+        return { data, asset: data.assets[index] };
+      });
+      if (newFilename && oldFilename && oldFilename !== newFilename) await removeWorkspaceFile(rootDir, mediaDir, oldFilename);
+      res.json({ asset: saved.result.asset, collection: saved.saved });
+    } catch (error) {
+      if (newFilename) await removeWorkspaceFile(rootDir, mediaDir, newFilename).catch(() => {});
+      throw error;
+    }
+  }));
+
+  router.delete(`${route}/:id`, asyncHandler(async (req, res) => {
+    const rootDir = await requireWorkspace(configPath);
+    let removed = null;
+    const saved = await mutateAssetJson(rootDir, jsonFilename, async (data) => {
+      const index = data.assets.findIndex((item) => item.id === req.params.id);
+      if (index < 0) throw httpError("图片资产不存在", 404, "NOT_FOUND");
+      removed = data.assets[index];
+      await assertDeleteAllowed(req, removed);
+      data.assets.splice(index, 1);
+      return { data, asset: removed };
+    });
+    if (removed?.imageFilename) await removeWorkspaceFile(rootDir, mediaDir, removed.imageFilename);
+    res.json({ deletedId: req.params.id, collection: saved.saved });
+  }));
+}
+
+async function mutateAssetJson(rootDir, jsonFilename, mutator) {
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const current = await readJsonFile(rootDir, jsonFilename, EMPTY_IMAGE_ASSETS);
+    const data = { assets: Array.isArray(current.data.assets) ? [...current.data.assets] : [] };
+    const result = await mutator(data);
+    try {
+      const saved = await writeJsonFile(rootDir, jsonFilename, result.data, current.mtimeMs);
+      return { saved, result };
+    } catch (error) {
+      lastError = error;
+      if (error.code !== "STALE_FILE" || attempt === 1) throw error;
+    }
+  }
+  throw lastError;
+}
+
+function normalizeImageAssetFields(body, requiresGender) {
+  const title = String(body?.title || "").trim();
+  const style = String(body?.style || "");
+  const era = String(body?.era || "");
+  const gender = String(body?.gender || "");
+  if (!title) throw httpError("请输入标题", 400, "TITLE_REQUIRED");
+  if (!new Set(["anime", "live"]).has(style)) throw httpError("请选择动漫或真人", 400, "INVALID_STYLE");
+  if (!new Set(["ancient", "modern"]).has(era)) throw httpError("请选择古代或现代", 400, "INVALID_ERA");
+  if (requiresGender && !new Set(["male", "female"]).has(gender)) throw httpError("请选择男或女", 400, "INVALID_GENDER");
+  const tags = String(body?.tags || "").split(",").map((tag) => tag.trim()).filter(Boolean);
+  return { title, tags, style, era, ...(requiresGender ? { gender } : {}) };
 }
 
 async function reconcileItems(req, currentItems, incomingItems, currentUserId, assertDeleteAllowed, destructiveFields = [], clock = Date.now) {

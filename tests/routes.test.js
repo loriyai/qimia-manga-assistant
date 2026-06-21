@@ -21,7 +21,7 @@ describe("routes", () => {
 
     const response = await request(app).get("/api/health").expect(200);
 
-    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手", version: "0.3.0" });
+    expect(response.body).toEqual({ ok: true, appName: "七秒漫剧助手", version: "0.4.0" });
   });
 
   it("merges workspace and Syncthing config updates", async () => {
@@ -358,5 +358,81 @@ describe("routes", () => {
       .expect(403);
     expect(denied.body.code).toBe("DELETE_FORBIDDEN");
     await expect(readFile(path.join(rootDir, "videos", uploaded.body.filename), "utf8")).resolves.toBe("temporary-video");
+  });
+
+  it("creates, replaces, serves, and deletes character image assets", async () => {
+    const { app, rootDir } = await makeAppWithWorkspace();
+    const created = await request(app)
+      .post("/api/assets/characters")
+      .field("title", "剑客")
+      .field("tags", "黑衣, 长剑")
+      .field("style", "anime")
+      .field("era", "ancient")
+      .field("gender", "male")
+      .field("createdBy", "spoofed")
+      .attach("image", Buffer.from("old-image"), { filename: "character.png", contentType: "image/png" })
+      .expect(201);
+    expect(created.body.asset).toMatchObject({
+      title: "剑客",
+      tags: ["黑衣", "长剑"],
+      style: "anime",
+      era: "ancient",
+      gender: "male",
+      createdBy: "test-user"
+    });
+    const oldFilename = created.body.asset.imageFilename;
+    await expect(readFile(path.join(rootDir, "characters", oldFilename), "utf8")).resolves.toBe("old-image");
+    await request(app).get(`/media/characters/${oldFilename}`).expect(200);
+
+    const updated = await request(app)
+      .put(`/api/assets/characters/${created.body.asset.id}`)
+      .field("title", "女剑客")
+      .field("tags", "红衣")
+      .field("style", "live")
+      .field("era", "modern")
+      .field("gender", "female")
+      .attach("image", Buffer.from("new-image"), { filename: "replacement.webp", contentType: "image/webp" })
+      .expect(200);
+    expect(updated.body.asset).toMatchObject({ title: "女剑客", style: "live", era: "modern", gender: "female" });
+    await expect(readFile(path.join(rootDir, "characters", oldFilename))).rejects.toMatchObject({ code: "ENOENT" });
+
+    await request(app).delete(`/api/assets/characters/${created.body.asset.id}`).expect(200);
+    await expect(readFile(path.join(rootDir, "characters", updated.body.asset.imageFilename))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("stores scenes without gender and enforces the 12-hour edit/delete boundary", async () => {
+    const rootDir = await mkdtemp(path.join(tmpdir(), "qimia-scene-routes-"));
+    const configPath = path.join(rootDir, "config.json");
+    let currentTime = Date.parse("2026-06-21T00:00:00.000Z");
+    const app = createApp({ configPath, now: () => currentTime });
+    const agent = request.agent(app);
+    await agent.post("/api/config").send({ workspaceDir: rootDir }).expect(200);
+    await agent.post("/api/workspace/init").expect(200);
+    await agent.post("/api/access/identity").send({ userId: "scene-owner" }).expect(200);
+    const created = await agent.post("/api/assets/scenes")
+      .field("title", "古城")
+      .field("tags", "城门")
+      .field("style", "anime")
+      .field("era", "ancient")
+      .field("gender", "male")
+      .attach("image", Buffer.from("scene-image"), { filename: "scene.jpg", contentType: "image/jpeg" })
+      .expect(201);
+    expect(created.body.asset.gender).toBeUndefined();
+
+    currentTime += 12 * 60 * 60 * 1000;
+    const editDenied = await agent.put(`/api/assets/scenes/${created.body.asset.id}`)
+      .field("title", "新古城")
+      .field("tags", "城门")
+      .field("style", "anime")
+      .field("era", "ancient")
+      .expect(403);
+    expect(editDenied.body.code).toBe("EDIT_FORBIDDEN");
+    const deleteDenied = await agent.delete(`/api/assets/scenes/${created.body.asset.id}`).expect(403);
+    expect(deleteDenied.body.code).toBe("DELETE_FORBIDDEN");
+
+    await agent.post("/api/admin/setup").send({ username: "admin", password: "password-123" }).expect(200);
+    await agent.post("/api/admin/login").send({ username: "admin", password: "password-123" }).expect(200);
+    await agent.post("/api/admin/delete-override").send({ enabled: true }).expect(200);
+    await agent.delete(`/api/assets/scenes/${created.body.asset.id}`).expect(200);
   });
 });

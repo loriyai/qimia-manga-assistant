@@ -3,6 +3,21 @@ const state = {
   prompts: { data: { categories: [], prompts: [] }, mtimeMs: 0 },
   library: { data: { resources: [] }, mtimeMs: 0 },
   aiSites: { data: { sites: [] }, mtimeMs: 0 },
+  imageAssets: {
+    characters: { data: { assets: [] }, mtimeMs: 0 },
+    scenes: { data: { assets: [] }, mtimeMs: 0 }
+  },
+  assetUi: {
+    characters: { style: "anime", era: "ancient", search: "", gender: "" },
+    scenes: { style: "anime", era: "ancient", search: "" }
+  },
+  editingImageAssetType: "",
+  editingImageAssetId: "",
+  selectedImageAssetFile: null,
+  selectedImageAssetUrl: "",
+  previewImageAssetType: "",
+  previewImageAssetId: "",
+  imageAssetView: { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 },
   access: { currentUserId: "", adminConfigured: false, adminAuthenticated: false, deleteOverrideEnabled: false, sessionExpiresAt: "", serverTime: "", deleteWindowHours: 12 },
   serverTimeOffsetMs: 0,
   appVersion: "",
@@ -31,6 +46,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindPrompts();
   bindResources();
   bindAiSites();
+  bindImageAssets();
   await Promise.all([loadConfig(), loadAppVersion(), loadAccessStatus()]);
   await loadAll();
   window.setInterval(() => loadAccessStatus().catch(() => {}), 60_000);
@@ -159,6 +175,42 @@ function bindAiSites() {
   });
 }
 
+function bindImageAssets() {
+  $("#addCharacterBtn").addEventListener("click", () => openImageAssetDialog("characters"));
+  $("#addSceneBtn").addEventListener("click", () => openImageAssetDialog("scenes"));
+  $("#characterSearch").addEventListener("input", () => {
+    state.assetUi.characters.search = $("#characterSearch").value;
+    renderImageAssetPage("characters");
+  });
+  $("#sceneSearch").addEventListener("input", () => {
+    state.assetUi.scenes.search = $("#sceneSearch").value;
+    renderImageAssetPage("scenes");
+  });
+  $("#characterGenderFilter").addEventListener("change", () => {
+    state.assetUi.characters.gender = $("#characterGenderFilter").value;
+    renderImageAssetPage("characters");
+  });
+  $("#characterEraFilter").addEventListener("change", () => changeImageAssetEra("characters", $("#characterEraFilter").value));
+  $("#sceneEraFilter").addEventListener("change", () => changeImageAssetEra("scenes", $("#sceneEraFilter").value));
+  $("#browseImageAssetBtn").addEventListener("click", () => $("#imageAssetFileInput").click());
+  $("#imageAssetFileInput").addEventListener("change", () => {
+    const file = $("#imageAssetFileInput").files[0];
+    if (file) selectImageAssetFile(file);
+    $("#imageAssetFileInput").value = "";
+  });
+  $("#cancelImageAssetBtn").addEventListener("click", closeImageAssetDialog);
+  $("#imageAssetDialog").addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeImageAssetDialog();
+  });
+  $("#imageAssetForm").addEventListener("submit", saveImageAssetFromDialog);
+  bindImageAssetDropZone();
+  $("#closeImageAssetPreviewBtn").addEventListener("click", () => $("#imageAssetPreviewDialog").close());
+  $("#editImageAssetBtn").addEventListener("click", editPreviewedImageAsset);
+  $("#deleteImageAssetBtn").addEventListener("click", deletePreviewedImageAsset);
+  bindImageAssetPreviewControls();
+}
+
 function openAiSiteDialog(item = null) {
   state.editingAiSiteId = item?.id || "";
   $("#aiSiteDialog h2").textContent = item ? "编辑 AI 网站" : "新增 AI 网站";
@@ -264,7 +316,7 @@ async function loadAppVersion() {
 }
 
 async function loadAll() {
-  await Promise.allSettled([loadPrompts(), loadLibrary(), loadAiSites()]);
+  await Promise.allSettled([loadPrompts(), loadLibrary(), loadAiSites(), loadImageAssets("characters"), loadImageAssets("scenes")]);
 }
 
 async function loadPrompts() {
@@ -280,6 +332,11 @@ async function loadLibrary() {
 async function loadAiSites() {
   state.aiSites = await api("/api/ai-sites");
   renderAiSites();
+}
+
+async function loadImageAssets(type) {
+  state.imageAssets[type] = await api(`/api/assets/${type}`);
+  renderImageAssetPage(type);
 }
 
 async function loadAccessStatus() {
@@ -374,6 +431,9 @@ function renderPermissionSensitiveViews() {
   renderPrompts();
   renderLibrary();
   renderAiSites();
+  renderImageAssetPage("characters");
+  renderImageAssetPage("scenes");
+  updateImageAssetPreviewPermissions();
   if ($("#categoryDialog").open) renderCategoryManagement();
   if ($("#promptThumbDialog").open) updatePromptThumbnailDeletePermission();
   if ($("#resourceDialog").open) renderResourceVideoStatus();
@@ -382,7 +442,7 @@ function renderPermissionSensitiveViews() {
 function setCreateControls() {
   const disabled = !state.access.currentUserId;
   const reason = disabled ? "请先在设置中填写本机用户 ID" : "";
-  ["#addPromptBtn", "#addCategoryBtn", "#addResourceBtn", "#refreshLibraryBtn", "#addAiSiteBtn"].forEach((selector) => {
+  ["#addPromptBtn", "#addCategoryBtn", "#addResourceBtn", "#refreshLibraryBtn", "#addAiSiteBtn", "#addCharacterBtn", "#addSceneBtn"].forEach((selector) => {
     const button = $(selector);
     button.disabled = disabled;
     button.title = reason;
@@ -1017,6 +1077,269 @@ async function deleteResource(resourceId) {
   renderLibrary();
 }
 
+const IMAGE_ASSET_TABS = [
+  { style: "anime", era: "ancient", label: "动漫古代" },
+  { style: "anime", era: "modern", label: "动漫现代" },
+  { style: "live", era: "ancient", label: "真人古代" },
+  { style: "live", era: "modern", label: "真人现代" }
+];
+
+function renderImageAssetPage(type) {
+  const config = getImageAssetConfig(type);
+  const ui = state.assetUi[type];
+  const typeLabel = config.label;
+  config.tabs.innerHTML = IMAGE_ASSET_TABS.map((tab) => `
+    <button class="${tab.style === ui.style && tab.era === ui.era ? "active" : ""}"
+      data-asset-tab-type="${type}" data-style="${tab.style}" data-era="${tab.era}">
+      ${tab.label}${typeLabel}
+    </button>
+  `).join("");
+  config.tabs.querySelectorAll("[data-asset-tab-type]").forEach((button) => {
+    button.addEventListener("click", () => {
+      ui.style = button.dataset.style;
+      ui.era = button.dataset.era;
+      config.eraFilter.value = ui.era;
+      renderImageAssetPage(type);
+    });
+  });
+
+  const query = ui.search.trim().toLowerCase();
+  const assets = state.imageAssets[type].data.assets.filter((item) => {
+    if (item.style !== ui.style || item.era !== ui.era) return false;
+    if (type === "characters" && ui.gender && item.gender !== ui.gender) return false;
+    if (!query) return true;
+    return [item.title, ...(Array.isArray(item.tags) ? item.tags : [])].join(" ").toLowerCase().includes(query);
+  });
+  config.grid.innerHTML = assets.map((item) => `
+    <button class="asset-card" data-image-asset-type="${type}" data-image-asset-id="${item.id}"
+      title="${escapeHtml(item.title || "未命名资产")}" aria-label="预览${escapeHtml(item.title || "未命名资产")}">
+      <img loading="lazy" src="${getImageAssetMediaUrl(type, item.imageFilename)}" alt="${escapeHtml(item.title || "图片资产")}" />
+    </button>
+  `).join("") || `<p class="empty-state">暂无${typeLabel}图片资产</p>`;
+  config.grid.querySelectorAll("[data-image-asset-id]").forEach((button) => {
+    button.addEventListener("click", () => openImageAssetPreview(type, button.dataset.imageAssetId));
+  });
+}
+
+function getImageAssetConfig(type) {
+  const character = type === "characters";
+  return {
+    label: character ? "人物" : "场景",
+    tabs: $(character ? "#characterTabs" : "#sceneTabs"),
+    grid: $(character ? "#characterGrid" : "#sceneGrid"),
+    eraFilter: $(character ? "#characterEraFilter" : "#sceneEraFilter")
+  };
+}
+
+function changeImageAssetEra(type, era) {
+  if (era) state.assetUi[type].era = era;
+  renderImageAssetPage(type);
+}
+
+function getImageAsset(type, id) {
+  return state.imageAssets[type]?.data.assets.find((item) => item.id === id);
+}
+
+function getImageAssetMediaUrl(type, filename) {
+  return `/media/${type}/${encodeURIComponent(filename || "")}`;
+}
+
+function openImageAssetDialog(type, item = null) {
+  const config = getImageAssetConfig(type);
+  clearSelectedImageAssetFile();
+  state.editingImageAssetType = type;
+  state.editingImageAssetId = item?.id || "";
+  $("#imageAssetDialogTitle").textContent = item ? `编辑${config.label}资产` : `新增${config.label}资产`;
+  $("#imageAssetTitle").value = item?.title || "";
+  $("#imageAssetTags").value = (item?.tags || []).join(", ");
+  $("#imageAssetStyle").value = item?.style || "";
+  $("#imageAssetEra").value = item?.era || "";
+  $("#imageAssetGenderField").hidden = type !== "characters";
+  $("#imageAssetGender").value = item?.gender || "";
+  $("#imageAssetDropHint").textContent = item ? "拖入或粘贴新图片可替换原图" : "拖入图片或粘贴图片";
+  const preview = $("#imageAssetSelectedPreview");
+  if (item?.imageFilename) {
+    preview.src = getImageAssetMediaUrl(type, item.imageFilename);
+    preview.hidden = false;
+  } else {
+    preview.removeAttribute("src");
+    preview.hidden = true;
+  }
+  $("#imageAssetDialog").showModal();
+  $("#imageAssetDropZone").focus();
+}
+
+function closeImageAssetDialog() {
+  if ($("#imageAssetDialog").open) $("#imageAssetDialog").close("cancel");
+  clearSelectedImageAssetFile();
+  state.editingImageAssetType = "";
+  state.editingImageAssetId = "";
+  $("#imageAssetSelectedPreview").removeAttribute("src");
+  $("#imageAssetSelectedPreview").hidden = true;
+}
+
+function bindImageAssetDropZone() {
+  const dropZone = $("#imageAssetDropZone");
+  dropZone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropZone.classList.add("dragging");
+  });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("dragging"));
+  dropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropZone.classList.remove("dragging");
+    const file = Array.from(event.dataTransfer.files || []).find((item) => item.type.startsWith("image/"));
+    if (file) selectImageAssetFile(file);
+  });
+  window.addEventListener("paste", (event) => {
+    if (!$("#imageAssetDialog").open) return;
+    const file = Array.from(event.clipboardData?.items || []).find((item) => item.type.startsWith("image/"))?.getAsFile();
+    if (file) {
+      event.preventDefault();
+      selectImageAssetFile(file);
+    }
+  });
+}
+
+function selectImageAssetFile(file) {
+  const allowed = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+  if (!allowed.has(file.type)) {
+    alert("仅支持 JPEG、PNG、WebP、GIF 或 AVIF 图片");
+    return;
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    alert("图片不能超过 25MB");
+    return;
+  }
+  clearSelectedImageAssetFile();
+  state.selectedImageAssetFile = file;
+  state.selectedImageAssetUrl = URL.createObjectURL(file);
+  $("#imageAssetSelectedPreview").src = state.selectedImageAssetUrl;
+  $("#imageAssetSelectedPreview").hidden = false;
+  $("#imageAssetDropHint").textContent = `已选择：${file.name || "粘贴图片"}`;
+}
+
+function clearSelectedImageAssetFile() {
+  if (state.selectedImageAssetUrl) URL.revokeObjectURL(state.selectedImageAssetUrl);
+  state.selectedImageAssetFile = null;
+  state.selectedImageAssetUrl = "";
+}
+
+async function saveImageAssetFromDialog(event) {
+  event.preventDefault();
+  const type = state.editingImageAssetType;
+  const id = state.editingImageAssetId;
+  if (!type) return;
+  if (!id && !state.selectedImageAssetFile) {
+    alert("请拖入、粘贴或选择图片");
+    return;
+  }
+  if (type === "characters" && !$("#imageAssetGender").value) {
+    alert("请选择男或女");
+    return;
+  }
+  const formData = new FormData();
+  formData.append("title", $("#imageAssetTitle").value);
+  formData.append("tags", $("#imageAssetTags").value);
+  formData.append("style", $("#imageAssetStyle").value);
+  formData.append("era", $("#imageAssetEra").value);
+  if (type === "characters") formData.append("gender", $("#imageAssetGender").value);
+  if (state.selectedImageAssetFile) formData.append("image", state.selectedImageAssetFile);
+  $("#saveImageAssetBtn").disabled = true;
+  try {
+    const response = await upload(`/api/assets/${type}${id ? `/${id}` : ""}`, formData, id ? "PUT" : "POST");
+    state.imageAssets[type] = response.collection;
+    state.assetUi[type].style = response.asset.style;
+    state.assetUi[type].era = response.asset.era;
+    getImageAssetConfig(type).eraFilter.value = response.asset.era;
+    closeImageAssetDialog();
+    renderImageAssetPage(type);
+  } catch (error) {
+    if (error.code === "EDIT_FORBIDDEN" || error.code === "STALE_FILE") await loadImageAssets(type);
+  } finally {
+    $("#saveImageAssetBtn").disabled = false;
+  }
+}
+
+function openImageAssetPreview(type, id) {
+  const item = getImageAsset(type, id);
+  if (!item) return;
+  state.previewImageAssetType = type;
+  state.previewImageAssetId = id;
+  resetImageAssetView();
+  const image = $("#imageAssetPreviewImg");
+  image.src = getImageAssetMediaUrl(type, item.imageFilename);
+  image.alt = item.title || "图片资产预览";
+  updateImageAssetPreviewPermissions();
+  $("#imageAssetPreviewDialog").showModal();
+}
+
+function updateImageAssetPreviewPermissions() {
+  const item = getImageAsset(state.previewImageAssetType, state.previewImageAssetId);
+  if (!item) return;
+  const permission = getDeletePermission(item);
+  for (const selector of ["#editImageAssetBtn", "#deleteImageAssetBtn"]) {
+    $(selector).disabled = !permission.allowed;
+    $(selector).title = permission.reason;
+  }
+}
+
+function editPreviewedImageAsset() {
+  const item = getImageAsset(state.previewImageAssetType, state.previewImageAssetId);
+  if (!item) return;
+  const type = state.previewImageAssetType;
+  $("#imageAssetPreviewDialog").close();
+  openImageAssetDialog(type, item);
+}
+
+async function deletePreviewedImageAsset() {
+  const type = state.previewImageAssetType;
+  const item = getImageAsset(type, state.previewImageAssetId);
+  if (!item || !await confirmDialog(`确定删除${getImageAssetConfig(type).label}资产“${item.title}”吗？`)) return;
+  try {
+    const response = await api(`/api/assets/${type}/${item.id}`, { method: "DELETE" });
+    state.imageAssets[type] = response.collection;
+    $("#imageAssetPreviewDialog").close();
+    renderImageAssetPage(type);
+  } catch (error) {
+    if (error.code === "DELETE_FORBIDDEN" || error.code === "STALE_FILE") await loadImageAssets(type);
+  }
+}
+
+function bindImageAssetPreviewControls() {
+  const viewport = $("#imageAssetViewport");
+  viewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 0.12 : -0.12;
+    state.imageAssetView.scale = Math.min(5, Math.max(0.3, state.imageAssetView.scale + delta));
+    updateImageAssetTransform();
+  }, { passive: false });
+  viewport.addEventListener("mousedown", (event) => {
+    state.imageAssetView.dragging = true;
+    state.imageAssetView.lastX = event.clientX;
+    state.imageAssetView.lastY = event.clientY;
+  });
+  window.addEventListener("mousemove", (event) => {
+    if (!state.imageAssetView.dragging) return;
+    state.imageAssetView.x += event.clientX - state.imageAssetView.lastX;
+    state.imageAssetView.y += event.clientY - state.imageAssetView.lastY;
+    state.imageAssetView.lastX = event.clientX;
+    state.imageAssetView.lastY = event.clientY;
+    updateImageAssetTransform();
+  });
+  window.addEventListener("mouseup", () => { state.imageAssetView.dragging = false; });
+}
+
+function resetImageAssetView() {
+  state.imageAssetView = { scale: 1, x: 0, y: 0, dragging: false, lastX: 0, lastY: 0 };
+  updateImageAssetTransform();
+}
+
+function updateImageAssetTransform() {
+  const view = state.imageAssetView;
+  $("#imageAssetPreviewImg").style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+}
+
 function renderAiSites() {
   $("#aiSiteList").innerHTML = state.aiSites.data.sites.map((item) => `
     <div class="ai-site-row sortable-row" draggable="true" data-sort-id="${item.id}">
@@ -1178,12 +1501,14 @@ async function api(url, options = {}) {
   return data;
 }
 
-async function upload(url, formData) {
-  const response = await fetch(url, { method: "POST", body: formData });
+async function upload(url, formData, method = "POST") {
+  const response = await fetch(url, { method, body: formData });
   const data = await response.json();
   if (!response.ok) {
     alert(data.error || "上传失败");
-    throw new Error(data.error || "Upload failed");
+    const error = new Error(data.error || "Upload failed");
+    error.code = data.code || "";
+    throw error;
   }
   return data;
 }

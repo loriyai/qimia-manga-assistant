@@ -13,7 +13,9 @@
       <button class="nav-btn active" data-page="prompts">提示词</button>
       <button class="nav-btn" data-page="videos">视频资源</button>
       <button class="nav-btn" data-page="ai-sites">AI网站</button>
-      <button class="nav-btn" data-page="settings">设置</button>
+      <button class="nav-btn" data-page="characters">人物</button>
+      <button class="nav-btn" data-page="scenes">场景</button>
+      <button class="nav-btn settings-nav" data-page="settings">设置</button>
       <span id="appVersion" class="app-version" aria-label="当前软件版本"></span>
     </aside>
     <main class="main">
@@ -65,6 +67,39 @@
           </div>
           <div id="aiSiteList"></div>
         </div>
+      </section>
+
+      <section class="page" id="page-characters">
+        <div class="toolbar asset-toolbar">
+          <button id="addCharacterBtn">新增人物资产</button>
+          <input id="characterSearch" class="toolbar-search" type="search" placeholder="搜索人物标题和标签" />
+          <select id="characterGenderFilter" class="toolbar-select">
+            <option value="">男/女</option>
+            <option value="male">男</option>
+            <option value="female">女</option>
+          </select>
+          <select id="characterEraFilter" class="toolbar-select">
+            <option value="">古代/现代</option>
+            <option value="ancient">古代</option>
+            <option value="modern">现代</option>
+          </select>
+        </div>
+        <div id="characterTabs" class="asset-tabs"></div>
+        <div id="characterGrid" class="asset-grid"></div>
+      </section>
+
+      <section class="page" id="page-scenes">
+        <div class="toolbar asset-toolbar">
+          <button id="addSceneBtn">新增场景资产</button>
+          <input id="sceneSearch" class="toolbar-search" type="search" placeholder="搜索场景标题和标签" />
+          <select id="sceneEraFilter" class="toolbar-select">
+            <option value="">古代/现代</option>
+            <option value="ancient">古代</option>
+            <option value="modern">现代</option>
+          </select>
+        </div>
+        <div id="sceneTabs" class="asset-tabs"></div>
+        <div id="sceneGrid" class="asset-grid"></div>
       </section>
 
       <section class="page" id="page-settings">
@@ -252,6 +287,54 @@
       </div>
     </div>
     <pre id="promptTextPreview"></pre>
+  </dialog>
+
+  <dialog id="imageAssetDialog" class="dialog image-asset-dialog">
+    <form id="imageAssetForm">
+      <h2 id="imageAssetDialogTitle">新增图片资产</h2>
+      <div id="imageAssetDropZone" class="drop-zone asset-drop-zone" tabindex="0">
+        <img id="imageAssetSelectedPreview" alt="待保存图片预览" hidden />
+        <p id="imageAssetDropHint">拖入图片或粘贴图片</p>
+        <button id="browseImageAssetBtn" type="button">选择图片</button>
+        <input id="imageAssetFileInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/avif" hidden />
+      </div>
+      <input id="imageAssetTitle" type="text" placeholder="标题" required />
+      <input id="imageAssetTags" type="text" placeholder="标签，用逗号分隔" />
+      <select id="imageAssetStyle" required>
+        <option value="">选择动漫/真人</option>
+        <option value="anime">动漫</option>
+        <option value="live">真人</option>
+      </select>
+      <select id="imageAssetEra" required>
+        <option value="">选择古代/现代</option>
+        <option value="ancient">古代</option>
+        <option value="modern">现代</option>
+      </select>
+      <div id="imageAssetGenderField">
+        <select id="imageAssetGender">
+          <option value="">选择男/女</option>
+          <option value="male">男</option>
+          <option value="female">女</option>
+        </select>
+      </div>
+      <div class="dialog-actions">
+        <button id="cancelImageAssetBtn" type="button">取消</button>
+        <button id="saveImageAssetBtn" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="imageAssetPreviewDialog" class="dialog image-asset-preview-dialog">
+    <div class="asset-preview-header">
+      <div class="preview-actions">
+        <button id="editImageAssetBtn">编辑</button>
+        <button id="deleteImageAssetBtn">删除</button>
+      </div>
+      <button id="closeImageAssetPreviewBtn">关闭</button>
+    </div>
+    <div id="imageAssetViewport" class="image-viewport asset-image-viewport">
+      <img id="imageAssetPreviewImg" alt="图片资产预览" />
+    </div>
   </dialog>
 
   <dialog id="confirmDialog" class="dialog confirm-dialog">
